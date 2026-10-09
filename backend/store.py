@@ -926,8 +926,10 @@ class Store(object):
     def flush_user_stats(self):
         """把攒下的提交统计按用户聚合落库：每个用户只 get+put 一次。
 
-        计分模型：`best[pid]` 记录该题历史最好分，总分 = 各题最好分之和；
-        `solved` 只记满分的题。这样部分分（PAC）也能正确累计。
+        计分模型（两套并行，互不影响）：
+          * 分数制：`best[pid]` 记录该题历史最好分，总分 = 各题最好分之和；`solved` 只记满分题
+          * ACM 赛制：`first_ac[pid]` = 首次 AC 的时间戳，`tries[pid]` = 首次 AC **之前**的失败次数
+            （首次 AC 之后的失败不再计入罚时，符合 ACM 规则）
         """
         with self._stats_lock:
             pending, self._pending_stats = self._pending_stats, []
@@ -944,10 +946,16 @@ class Store(object):
             solved = list(u.get("solved") or [])
             best = dict(u.get("best") or {})
             first_ac = dict(u.get("first_ac") or {})
+            tries = dict(u.get("tries") or {})
             for it in items:
                 u["submit_count"] = int(u.get("submit_count", 0)) + 1
                 pid, verdict = it.get("pid"), it.get("verdict")
                 score = int(it.get("score") or 0)
+                ts = int(it.get("ts") or now_ts())
+                # 记录该用户最早一次提交的时间（ACM 计时起点需要它）
+                prev = int(u.get("first_sub") or 0)
+                if not prev or ts < prev:
+                    u["first_sub"] = ts
                 if pid:
                     if score > int(best.get(pid, 0) or 0):
                         best[pid] = score
@@ -956,17 +964,21 @@ class Store(object):
                         if pid not in solved:
                             solved.append(pid)
                         first_ac.setdefault(pid, int(it.get("ts") or now_ts()))
+                    elif pid not in solved:
+                        # 还没 AC 就失败 → 记一次罚时（AC 之后再错不算）
+                        tries[pid] = int(tries.get(pid, 0)) + 1
                 u["last_ts"] = now_ts()
             u["solved"] = solved
             u["best"] = best
             u["first_ac"] = first_ac
+            u["tries"] = tries
             u["score"] = sum(int(v or 0) for v in best.values())
             self.put_json("usr:" + str(user), u)
             done += 1
         return done
 
     def _apply_user_stats(self, subs):
-        """非批量模式下的即时统计（同样遵循 best-per-problem 计分）。"""
+        """非批量模式下的即时统计（同样遵循 best-per-problem 计分 + ACM 罚时）。"""
         for sub in subs:
             u = self.get_user(sub.get("user"))
             if not u:
@@ -974,6 +986,7 @@ class Store(object):
             solved = list(u.get("solved") or [])
             best = dict(u.get("best") or {})
             first_ac = dict(u.get("first_ac") or {})
+            tries = dict(u.get("tries") or {})
             pid, score = sub.get("pid"), int(sub.get("score") or 0)
             u["submit_count"] = int(u.get("submit_count", 0)) + 1
             if pid:
@@ -984,7 +997,10 @@ class Store(object):
                     if pid not in solved:
                         solved.append(pid)
                     first_ac.setdefault(pid, int(sub.get("finished") or now_ts()))
+                elif pid not in solved:
+                    tries[pid] = int(tries.get(pid, 0)) + 1
             u["solved"], u["best"], u["first_ac"] = solved, best, first_ac
+            u["tries"] = tries
             u["score"] = sum(int(v or 0) for v in best.values())
             u["last_ts"] = now_ts()
             self.put_json("usr:" + u["user"], u)
@@ -1065,18 +1081,71 @@ class Store(object):
 
     # ============================================================ 排行榜
     def rebuild_rank(self):
+        """构建排行榜快照。
+
+        * 分数制（兼容旧用法）：按总分 → AC 数 → 提交次数排序
+        * ACM 赛制（前端主用）：按 通过题数 ↓ → 罚时 ↑ → 最后过题时间 ↑ 排序
+          罚时 = Σ(每题首次 AC 距比赛开始的分钟数 + 20 分钟 × 该题首次 AC 前的失败次数)
+        """
         users = self.list_users()
+        pids = self.list_problem_ids()
+
+        # 罚时参数：rank.contest_start 为空则自动取所有"首次 AC"里最早的时间
+        start_cfg = self.cfg.getv("rank.contest_start", "")
+        contest_start = 0
+        if isinstance(start_cfg, (int, float)) and start_cfg:
+            contest_start = int(start_cfg)
+        elif isinstance(start_cfg, str) and start_cfg.strip():
+            try:
+                contest_start = int(start_cfg.strip())
+            except ValueError:
+                try:
+                    import datetime as _dt
+                    contest_start = int(_dt.datetime.fromisoformat(start_cfg.strip()).timestamp())
+                except Exception:  # noqa: BLE001
+                    contest_start = 0
+        penalty_min = int(self.cfg.getv("rank.penalty_min", 20))
+        if not contest_start:
+            # 优先用"最早一次提交"当开赛时间（否则第一个 AC 的人永远是 0 分钟，看不出用时）
+            first_subs = [int(u.get("first_sub") or 0) for u in users if u.get("first_sub")]
+            all_first = [int(t) for u in users for t in (u.get("first_ac") or {}).values()]
+            contest_start = min(first_subs) if first_subs else (min(all_first) if all_first else now_ts())
+
         order = []
         for u in users:
+            # 只把真正提交过的人放进榜（过滤掉注册了但没做题的账号）
+            if int(u.get("submit_count", 0) or 0) <= 0:
+                continue
+            first_ac = dict(u.get("first_ac") or {})
+            tries = dict(u.get("tries") or {})
+            cells = {}
+            penalty = 0
+            for pid, ts in first_ac.items():
+                mins = max(0, int((int(ts) - contest_start) // 60))
+                fails = int(tries.get(pid, 0) or 0)
+                penalty += mins + penalty_min * fails
+                cells[pid] = {"v": "ac", "t": mins, "f": fails}
+            for pid, fails in tries.items():
+                if pid not in first_ac:
+                    cells[pid] = {"v": "try", "f": int(fails or 0)}
             order.append({"user": u.get("user"), "nick": u.get("nick", u.get("user")),
                           "score": int(u.get("score", 0) or 0),
                           "ac": int(u.get("ac_count", 0) or 0),
                           "submit": int(u.get("submit_count", 0) or 0),
+                          "solved": len(first_ac),
+                          "penalty": penalty,
+                          "last_ac": max([int(t) for t in first_ac.values()] or [0]),
+                          "cells": cells,
                           "last_ts": int(u.get("last_ts", 0) or 0)})
-        order.sort(key=lambda x: (-x["score"], -x["ac"], x["submit"], x["user"] or ""))
-        for i, row in enumerate(order, 1):
+        acm = sorted(order, key=lambda x: (-x["solved"], x["penalty"], x["last_ac"], x["user"] or ""))
+        for i, row in enumerate(acm, 1):
             row["rank"] = i
-        snapshot = {"ts": now_ts(), "total": len(order), "order": order[:100]}
+        by_score = sorted(order, key=lambda x: (-x["score"], -x["ac"], x["submit"], x["user"] or ""))
+        snapshot = {"ts": now_ts(), "mode": "acm", "contest_start": contest_start,
+                    "penalty_min": penalty_min, "problems": pids,
+                    "total": len(order), "order": acm[:100],
+                    "order_by_score": [{"user": r["user"], "nick": r["nick"], "score": r["score"],
+                                        "rank": i} for i, r in enumerate(by_score[:100], 1)]}
         self.put_json("rank", snapshot)
         return snapshot
 

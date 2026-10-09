@@ -156,6 +156,7 @@
     $$('.panel').forEach(function (p) { p.classList.toggle('active', p.dataset.panel === name); });
     try { window.scrollTo(0, 0); } catch (e) { /* ignore */ }
     if (name === 'rank') loadRank();
+    if (name === 'mine') loadMine();
     if (name === 'problems') loadProblems();
   }
 
@@ -604,15 +605,99 @@
     toast('评测完成：' + v, v === 'AC' ? 'ok' : 'bad');
   }
 
-  /* ------------------------------------------------------- 榜单 */
+  /* ------------------------------------------------------- 提交记录/榜单 */
+  var VERDICT_ZH = { AC: '通过', WA: '答案错误', TLE: '超时', MLE: '超内存', RE: '运行错误',
+                     CE: '编译错误', OLE: '输出超限', PE: '格式错误', PAC: '部分分',
+                     JE: '判题机错误', UD: '未定义', SKIP: '跳过' };
+
+  async function loadMine() {
+    var box = $('#mine-list');
+    if (!state.session) {
+      box.innerHTML = '<p class="muted">请先登录后查看自己的提交</p>';
+      return;
+    }
+    box.innerHTML = '<p class="muted">查询中…</p>';
+    var rep = await rpc('mysubs', { limit: 30 });
+    if (!rep.ok) { box.innerHTML = '<p class="muted">' + esc(rep.msg || '查询失败') + '</p>'; return; }
+    var subs = (rep.data && rep.data.subs) || [];
+    if (!subs.length) { box.innerHTML = '<p class="muted">还没有提交</p>'; return; }
+    box.innerHTML = subs.map(function (s) {
+      var v = s.verdict || s.status;
+      var cls = v === 'AC' ? 'ac' : (s.status === 'judging' || s.status === 'pending' ? 'warn' : 'bad');
+      var when = s.ts ? new Date(s.ts * 1000).toLocaleString() : '';
+      return '<div class="card sub" data-sid="' + esc(s.sid) + '">'
+        + '<div class="prow"><span class="pid">' + esc(s.sid) + '</span>'
+        + '<span class="ptitle">' + esc(s.pid) + '</span>'
+        + '<span class="badge ' + cls + '">' + esc(VERDICT_ZH[v] || v || '—') + '</span>'
+        + '<span class="muted small">' + esc(s.lang) + '</span></div>'
+        + '<div class="muted small">分数 ' + esc(s.score == null ? '-' : s.score)
+        + (s.time_ms ? ' · ' + esc(s.time_ms) + 'ms' : '')
+        + (s.memory_kb ? ' · ' + esc(Math.round(s.memory_kb / 1024)) + 'MB' : '')
+        + (s.cases_passed != null && s.case_count ? ' · 通过 ' + esc(s.cases_passed) + '/' + esc(s.case_count) + ' 点' : '')
+        + ' · ' + esc(when) + '</div>'
+        + '<div class="muted small" data-role="msg">' + esc(short(s.msg, 120)) + '</div>'
+        + '<div data-role="detail"></div></div>';
+    }).join('');
+    $$('.sub').forEach(function (el) {
+      el.onclick = function () { openSubDetail(el.dataset.sid, el); };
+    });
+  }
+
+  async function openSubDetail(sid, el) {
+    var host = el.querySelector('[data-role="detail"]');
+    if (host.dataset.open === '1') { host.innerHTML = ''; host.dataset.open = '0'; return; }
+    host.dataset.open = '1';
+    host.innerHTML = '<div class="muted small">读取中…</div>';
+    var lines = [];
+    // 本地留底的源码
+    var src = SRC.get(sid);
+    if (src && src.code) {
+      lines.push('<div class="muted small">我提交的源码（本机留底）</div><pre class="codebox">'
+                 + esc(src.code) + '</pre>');
+    }
+    // 云端结果（如果还在）
+    var sub = await state.db.getJson('sub:' + sid, null);
+    if (sub && sub.status === 'done') {
+      lines.push('<div class="muted small">最终判定：' + esc(VERDICT_ZH[sub.verdict] || sub.verdict)
+                 + ' · 分数 ' + esc(sub.score) + '</div>');
+    }
+    host.innerHTML = lines.join('') || '<div class="muted small">没有更多详情</div>';
+  }
+
   async function loadRank() {
-    var box = $('#rank-body');
-    box.innerHTML = '<tr><td colspan="5" class="muted">查询中…</td></tr>';
+    var body = $('#rank-body'), head = $('#rank-head');
+    body.innerHTML = '<tr><td colspan="6" class="muted">查询中…</td></tr>';
     var rank = await state.db.getJson('rank', null);
-    if (!rank || !rank.order) { box.innerHTML = '<tr><td colspan="5" class="muted">暂无榜单（判题机还没刷新）</td></tr>'; return; }
-    box.innerHTML = rank.order.map(function (r) {
-      return '<tr><td>' + esc(r.rank) + '</td><td>' + esc(r.nick || r.user) + '</td>'
-        + '<td><b>' + esc(r.score) + '</b></td><td>' + esc(r.ac) + '</td><td>' + esc(r.submit) + '</td></tr>';
+    if (!rank || !rank.order || !rank.order.length) {
+      body.innerHTML = '<tr><td colspan="6" class="muted">暂无榜单（还没有人提交）</td></tr>';
+      return;
+    }
+    var pids = rank.problems || [];
+    if (!pids.length) {
+      var seen = {};
+      rank.order.forEach(function (r) { Object.keys(r.cells || {}).forEach(function (p) { seen[p] = 1; }); });
+      pids = Object.keys(seen).sort();
+    }
+    if ($('#rank-mode')) {
+      $('#rank-mode').textContent = '（ACM 赛制 · 共 ' + rank.order.length + ' 人 · '
+        + pids.length + ' 题 · 罚时 ' + (rank.penalty_min || 20) + ' 分钟/次失败）';
+    }
+    head.innerHTML = '<th>#</th><th>用户</th><th>通过</th><th>罚时</th>'
+      + pids.map(function (p) { return '<th class="pcol">' + esc(p) + '</th>'; }).join('');
+    body.innerHTML = rank.order.map(function (r) {
+      var cells = r.cells || {};
+      var tds = pids.map(function (p) {
+        var c = cells[p];
+        if (!c) return '<td class="pcol empty">·</td>';
+        if (c.v === 'ac') {
+          return '<td class="pcol ac"><b>' + esc(c.t) + '</b>'
+            + (c.f ? '<span class="fails">+' + esc(c.f) + '</span>' : '') + '</td>';
+        }
+        return '<td class="pcol try">-' + esc(c.f) + '</td>';
+      }).join('');
+      var medal = r.rank === 1 ? '🥇' : (r.rank === 2 ? '🥈' : (r.rank === 3 ? '🥉' : r.rank));
+      return '<tr><td>' + medal + '</td><td>' + esc(r.nick || r.user) + '</td>'
+        + '<td><b>' + esc(r.solved) + '</b></td><td>' + esc(r.penalty) + '</td>' + tds + '</tr>';
     }).join('');
   }
 
@@ -623,6 +708,7 @@
     $('#btn-register').onclick = doRegister;
     $('#btn-submit').onclick = doSubmit;
     $('#btn-reload-problems').onclick = loadProblems;
+    if ($('#btn-reload-mine')) $('#btn-reload-mine').onclick = loadMine;
     if ($('#btn-reload-rank')) $('#btn-reload-rank').onclick = loadRank;
     if ($('#btn-back-problems')) $('#btn-back-problems').onclick = function () { showTab('problems'); };
     $('#login-pass').addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });

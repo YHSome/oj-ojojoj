@@ -75,6 +75,8 @@ EDITABLE = [
     ("crypto.enabled", "bool", "启用非对称加密接收代码"),
     ("crypto.seal_results", "bool", "结果加密回传"),
     ("checker.default", "str", "默认比较方式 tokens/exact/float/custom"),
+    ("rank.penalty_min", "int", "ACM 罚时：每次失败的罚时分钟数（默认 20）"),
+    ("rank.contest_start", "str", "ACM 计时起点（留空=自动取最早一次 AC；也可填 unix 秒或 ISO 时间）"),
 ]
 
 ACTIONS = {

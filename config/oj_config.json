@@ -184,6 +184,11 @@
       "spj": "custom"
     }
   },
+  "rank": {
+    "mode": "acm",
+    "contest_start": "",
+    "penalty_min": 20
+  },
   "paths": {
     "root": "",
     "data": "",

@@ -220,6 +220,33 @@ pre.code { max-height: 340px; overflow: auto; background: #080a0e; border: 1px s
 }
 @keyframes oj-slide { 0% { left: -40%; } 100% { left: 100%; } }
 
+/* ---------------- ACM 赛制排行榜 ---------------- */
+.acm-wrap { overflow-x: auto; }
+table.table.acm { width: auto; min-width: 100%; }
+table.table.acm th, table.table.acm td { padding: 6px 10px; text-align: center; white-space: nowrap; }
+table.table.acm th:nth-child(2), table.table.acm td:nth-child(2) { text-align: left; }
+table.table.acm td.pcol { min-width: 56px; font-variant-numeric: tabular-nums; }
+table.table.acm td.pcol.ac { color: var(--ok); background: #35c98a14; font-weight: 600; }
+table.table.acm td.pcol.ac .fails { color: var(--warn); font-weight: 400; font-size: 11px; margin-left: 3px; }
+table.table.acm td.pcol.try { color: var(--bad); background: #ff5c7a0f; }
+table.table.acm td.pcol.empty { color: var(--line); }
+table.table.acm thead th.pcol { font-family: var(--mono); font-size: 12px; }
+table.table.acm tbody tr:hover { background: var(--panel2); }
+
+pre.codebox {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  max-height: 280px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre;
+  margin: 6px 0 0;
+}
+.badge.bad { color: var(--bad); border-color: #ff5c7a55; }
+
 @media (max-width: 680px) {
   input { min-width: 0; width: 100%; }
   .row { align-items: stretch; }

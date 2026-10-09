@@ -29,7 +29,7 @@ fi
 
 echo
 echo "=== 不该再出现的元素（已被简化掉） ==="
-for id in health judgekey btn-refresh-key mine-list btn-judge-status judge-status setup-status cfg-api cfg-user cfg-secret btn-save-creds btn-test-creds btn-clear-creds btn-clear-log; do
+for id in health judgekey btn-refresh-key btn-judge-status judge-status setup-status cfg-api cfg-user cfg-secret btn-save-creds btn-test-creds btn-clear-creds btn-clear-log; do
   n=$(grep -c "id=\"$id\"" "$HTML")
   [ "$n" = "0" ] && printf "  ✔ 已移除 #%-18s\n" "$id" || printf "  ✘ 仍存在 #%s\n" "$id"
 done
@@ -41,8 +41,15 @@ echo "=== 面板 ==="
 grep -o 'data-panel="[a-z]*"' "$HTML" | sed 's/^/  /'
 
 echo
+echo "=== 应当保留的关键元素 ==="
+for id in login-user login-pass btn-login btn-register problem-list mine-list rank-body rank-head btn-submit code p-pid p-title; do
+  n=$(grep -c "id=\"$id\"" "$HTML")
+  [ "$n" != "0" ] && printf "  ✔ #%-16s\n" "$id" || printf "  ✘ 缺少 #%s\n" "$id"
+done
+
+echo
 echo "=== 是否还残留已删除的函数 ==="
-for fn in renderSetup saveCredentials testCredentials loadMine loadJudgeStatus; do
+for fn in renderSetup saveCredentials testCredentials loadJudgeStatus; do
   n=$(grep -c "function $fn" "$JS")
   [ "$n" = "0" ] && printf "  ✔ 已删除 %s\n" "$fn" || printf "  ✘ 仍存在 %s\n" "$fn"
 done

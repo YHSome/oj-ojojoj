@@ -20,6 +20,7 @@
 <nav class="tabs">
   <button class="tab active" data-tab="login">登录 / 注册</button>
   <button class="tab" data-tab="problems">题目</button>
+  <button class="tab" data-tab="mine">提交记录</button>
   <button class="tab" data-tab="rank">排行榜</button>
 </nav>
 
@@ -75,16 +76,29 @@
     <div id="watch-list" class="list"></div>
   </section>
 
-  <!-- ============================ 排行榜 ============================ -->
+  <!-- ============================ 提交记录 ============================ -->
+  <section class="panel" data-panel="mine">
+    <div class="row between">
+      <h1>提交记录</h1>
+      <button id="btn-reload-mine">刷新</button>
+    </div>
+    <div id="mine-list" class="list"></div>
+  </section>
+
+  <!-- ============================ 排行榜（ACM 赛制） ============================ -->
   <section class="panel" data-panel="rank">
     <div class="row between">
-      <h1>排行榜</h1>
+      <h1>排行榜 <span id="rank-mode" class="muted small"></span></h1>
       <button id="btn-reload-rank">刷新</button>
     </div>
-    <table class="table">
-      <thead><tr><th>#</th><th>用户</th><th>总分</th><th>通过</th><th>提交</th></tr></thead>
-      <tbody id="rank-body"></tbody>
-    </table>
+    <div class="acm-wrap">
+      <table class="table acm">
+        <thead><tr id="rank-head"><th>#</th><th>用户</th><th>通过</th><th>罚时</th></tr></thead>
+        <tbody id="rank-body"></tbody>
+      </table>
+    </div>
+    <p class="muted small">ACM 赛制：先按通过题数排序，题数相同看罚时。
+      罚时 = 每题首次 AC 距开赛的分钟数 + 20 分钟 × 该题首次 AC 前的失败次数；绿色数字为该题用时（分钟）。</p>
   </section>
 
 </main>
