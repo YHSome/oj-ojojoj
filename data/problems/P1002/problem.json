@@ -1,0 +1,18 @@
+{
+  "pid": "P1002",
+  "title": "区间求和",
+  "statement": "给定 n 个整数和 m 次询问，每次询问给出 l, r，输出下标 l 到 r（含）的元素之和，下标从 1 开始。\n\n【输入格式】\n第一行两个整数 n, m（1 <= n, m <= 100000）。\n第二行 n 个整数 a_i（|a_i| <= 10^9）。\n接下来 m 行，每行两个整数 l, r（1 <= l <= r <= n）。\n\n【输出格式】\nm 行，每行一个整数表示区间和。\n\n【提示】\n请使用前缀和，朴素做法会超时。\n\n【时空限制】\n时间 1000ms，内存 256MB。",
+  "difficulty": "medium",
+  "tags": ["前缀和"],
+  "time_limit_ms": 1000,
+  "memory_limit_kb": 262144,
+  "output_limit_kb": 65536,
+  "checker": "diff",
+  "float_eps": 1e-06,
+  "total_score": 100,
+  "visible": true,
+  "cases": [
+    { "file": "01", "name": "样例", "score": 30 },
+    { "file": "02", "name": "大数据", "score": 70 }
+  ]
+}
