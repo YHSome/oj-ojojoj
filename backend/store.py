@@ -22,7 +22,7 @@ import time
 
 from twdb import TinyWebDB, TwdbError, dumps, loads
 
-SCHEMA = "oj-YOUR_USER/1.0"
+SCHEMA = "oj-ojojoj/1.0"
 
 STATUS_PENDING = "pending"
 STATUS_JUDGING = "judging"

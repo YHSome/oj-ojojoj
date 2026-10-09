@@ -91,6 +91,12 @@ def main():
     if user and user != "YOUR_USER":
         subs.append((user, "YOUR_USER"))
 
+    # 注意：用户名可能正好是项目 slug 的一部分（oj-<user>），
+    # 直接全局替换会把标识符也改坏（schema "oj-ojojoj/1.0" 曾被改成 "oj-YOUR_USER/1.0"）。
+    # 先把这类 slug 保护起来，替换完再还原。
+    slug = "oj-" + user if user else None
+    PROTECT = "\x00OJSLUG\x00"
+
     changed = []
     for path in targets:
         if os.path.abspath(path) in (os.path.abspath(LOCAL),):
@@ -101,9 +107,13 @@ def main():
         except (OSError, UnicodeDecodeError):
             continue
         new = text
+        if slug and slug in new:
+            new = new.replace(slug, PROTECT)
         for a, b in subs:
             if a and a in new:
                 new = new.replace(a, b)
+        if PROTECT in new:
+            new = new.replace(PROTECT, slug)
         if new != text:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(new)
