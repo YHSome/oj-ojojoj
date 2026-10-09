@@ -150,26 +150,26 @@
   }
 
   function showTab(name) {
-    $$('.tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === name); });
+    // 「做题」是从题目列表进入的详情页，导航栏上不占标签，高亮「题目」
+    var nav = name === 'submit' ? 'problems' : name;
+    $$('.tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === nav); });
     $$('.panel').forEach(function (p) { p.classList.toggle('active', p.dataset.panel === name); });
+    try { window.scrollTo(0, 0); } catch (e) { /* ignore */ }
     if (name === 'rank') loadRank();
-    if (name === 'mine') loadMine();
     if (name === 'problems') loadProblems();
-    if (name === 'setup') renderSetup();
   }
 
   /* --------------------------------------------------------- 初始化 */
   async function boot() {
     state.db = new DB({ log: log });
     log('info', '前端已启动，API = ' + state.db.cfg.api);
-    renderSetup();
     if (!state.db.hasCredentials()) {
-      // 公开部署（例如 GitHub Pages）里不带任何密钥：让使用者填自己的实例
-      log('warn', '还没有配置云端凭据 → 请在「连接设置」里填入你的 TinyWebDB user/secret');
-      toast('首次使用：请到「连接设置」填入你的 TinyWebDB 实例信息', 'bad');
-      $('#health').textContent = '未配置云端凭据';
-      $('#health').className = 'pill bad';
-      showTab('setup');
+      // 公开页面上不出现配置界面：缺配置时只提示一句
+      log('err', '缺少云端连接配置（assets/config.js）');
+      setStatus('#auth-status', '服务未就绪：缺少云端连接配置，请联系管理员', 'bad');
+      progress('#auth-progress', false);
+      if ($('#btn-login')) $('#btn-login').disabled = true;
+      if ($('#btn-register')) $('#btn-register').disabled = true;
       return;
     }
 
@@ -202,7 +202,7 @@
       // 已有会话：先自检 token 是否还有效，别让用户"看着登录了其实早过期"
       renderSession();
       showTab('problems');
-      $('#session-state').textContent = '校验登录态…';
+      if ($('#session-state')) $('#session-state').textContent = '校验登录态…';
       rpc('whoami', {}, 12000).then(function (rep) {
         if (rep.ok) {
           state.session.user = rep.data.user.user;
@@ -210,41 +210,30 @@
           state.session.solved = rep.data.user.solved || [];
           LS.set('oj_session', state.session);
           renderSession();
-          $('#session-state').textContent = '';
+          if ($('#session-state')) $('#session-state').textContent = '';
           log('ok', '登录态有效：' + state.session.user);
         } else {
           log('warn', '登录态已失效：' + (rep.msg || ''));
           doLogout(true);
         }
-      }).catch(function () { $('#session-state').textContent = ''; });
+      }).catch(function () { if ($('#session-state')) $('#session-state').textContent = ''; });
     }
 
     await refreshJudgeKey();
     await loadProblems();
-    var health = $('#health');
-    health.textContent = '检查中…';
-    try {
-      var n = await state.db.count();
-      health.textContent = '云端可用 · 共 ' + n + ' 个标签';
-      health.className = 'pill ok';
-    } catch (e) {
-      health.textContent = '云端不可用: ' + e.message;
-      health.className = 'pill bad';
-    }
   }
 
   async function refreshJudgeKey() {
+    // 公钥只用于提交时加密，不在界面上展示
     var pub = await state.db.getJson('oj:pubkey', null);
     if (!pub || !pub.n) {
       state.judgePubJwk = null;
-      $('#judgekey').textContent = '未发布（判题机还没启动过）';
-      $('#judgekey').className = 'pill bad';
+      log('warn', '云端还没有判题机公钥（判题机没启动过）');
       return;
     }
     state.judgePubJwk = pub;
     state.judgeFp = pub.fingerprint || await C.fingerprint(pub);
-    $('#judgekey').textContent = '判题机公钥 ' + state.judgeFp;
-    $('#judgekey').className = 'pill ok';
+    log('ok', '判题机公钥指纹 ' + state.judgeFp);
   }
 
   /* ------------------------------------------------------------- 命令总线 */
@@ -615,31 +604,7 @@
     toast('评测完成：' + v, v === 'AC' ? 'ok' : 'bad');
   }
 
-  /* ------------------------------------------------------- 我的提交/榜单 */
-  async function loadMine() {
-    var box = $('#mine-list');
-    if (!state.session) { box.innerHTML = '<p class="muted">请先登录</p>'; return; }
-    box.innerHTML = '<p class="muted">查询中…</p>';
-    var rep = await rpc('mysubs', { limit: 20 });
-    if (!rep.ok) { box.innerHTML = '<p class="muted">' + esc(rep.msg) + '</p>'; return; }
-    var subs = (rep.data && rep.data.subs) || [];
-    if (!subs.length) { box.innerHTML = '<p class="muted">还没有提交</p>'; return; }
-    box.innerHTML = subs.map(function (s) {
-      return '<div class="card sub" data-sid="' + esc(s.sid) + '">'
-        + '<div class="prow"><span class="pid">' + esc(s.sid) + '</span>'
-        + '<span class="ptitle">' + esc(s.pid) + '</span>'
-        + '<span class="badge ' + (s.verdict === 'AC' ? 'ac' : '') + '">' + esc(s.verdict || s.status) + '</span></div>'
-        + '<div class="muted small">' + esc(s.lang) + ' · 分数 ' + esc(s.score) + ' · ' + esc(s.time_ms) + 'ms · ' + esc(short(s.msg, 60)) + '</div></div>';
-    }).join('');
-    $$('.sub').forEach(function (el) {
-      el.onclick = function () {
-        var panel = openResultPanel(el.dataset.sid, '');
-        panel.querySelector('[data-role="status"]').textContent = '读取中';
-        pollOnce(el.dataset.sid, panel);
-      };
-    });
-  }
-
+  /* ------------------------------------------------------- 榜单 */
   async function loadRank() {
     var box = $('#rank-body');
     box.innerHTML = '<tr><td colspan="5" class="muted">查询中…</td></tr>';
@@ -651,88 +616,15 @@
     }).join('');
   }
 
-  async function loadJudgeStatus() {
-    var box = $('#judge-status');
-    box.textContent = '查询中…';
-    var tags = await state.db.search('judge:', { count: 100, type: 'both' });
-    var rows = Object.keys(tags).filter(function (k) { return k.indexOf('judge:') === 0; })
-      .map(function (k) { try { return JSON.parse(tags[k]); } catch (e) { return null; } })
-      .filter(Boolean);
-    if (!rows.length) { box.textContent = '没有在线的判题机'; return; }
-    box.innerHTML = rows.map(function (j) {
-      return '<div class="card"><b>' + esc(j.id) + '</b> @ ' + esc(j.host)
-        + '<div class="muted small">workers=' + esc(j.workers) + ' busy=' + esc(j.busy)
-        + ' langs=' + esc((j.langs || []).join(',')) + ' 已判 ' + esc((j.stats || {}).judged)
-        + ' · 心跳 ' + new Date((j.ts || 0) * 1000).toLocaleTimeString() + '</div></div>';
-    }).join('');
-  }
-
   /* ---------------------------------------------------------------- 绑定 */
-  /* ------------------------------------------------------------ 连接设置 */
-  function renderSetup() {
-    var ok = state.db.hasCredentials();
-    var box = $('#setup-status');
-    if (!box) return;
-    box.innerHTML = ok
-      ? '<div class="prow"><span class="badge ac">已配置</span>'
-        + '<span class="muted small">API ' + esc(state.db.cfg.api) + ' · user '
-        + esc(state.db.cfg.user) + ' · secret ' + esc(String(state.db.cfg.secret).slice(0, 3)) + '***</span></div>'
-      : '<div class="prow"><span class="badge warn">未配置</span>'
-        + '<span class="muted small">填好下面的三项并保存，本页就能用了</span></div>';
-    if ($('#cfg-api')) {
-      if (!$('#cfg-api').value) $('#cfg-api').value = state.db.cfg.api || '';
-      if (!$('#cfg-user').value && ok) $('#cfg-user').value = state.db.cfg.user || '';
-    }
-  }
-
-  async function saveCredentials() {
-    var api = $('#cfg-api').value.trim() || 'https://tinywebdb.appinventor.space/api';
-    var user = $('#cfg-user').value.trim();
-    var secret = $('#cfg-secret').value.trim();
-    if (!user || !secret) return toast('user 和 secret 都要填', 'bad');
-    state.db.saveCredentials(api, user, secret);
-    log('ok', '凭据已保存在本机浏览器（api=' + api + ' user=' + user + '）');
-    toast('已保存，正在测试连通性…', 'ok');
-    var info = await state.db.ping();
-    if (!info.ok) {
-      toast('连不上：' + info.error, 'bad');
-      $('#health').textContent = '云端不可用';
-      $('#health').className = 'pill bad';
-      return;
-    }
-    $('#health').textContent = '云端可用 · 共 ' + info.count + ' 个标签';
-    $('#health').className = 'pill ok';
-    toast('连接成功（' + info.count + ' 个标签）', 'ok');
-    renderSetup();
-    await refreshJudgeKey();
-    await loadProblems();
-    showTab('problems');
-  }
-
-  async function testCredentials() {
-    var info = await state.db.ping();
-    toast(info.ok ? ('连通正常，' + info.count + ' 个标签，' + info.ms + 'ms')
-                  : ('连不上：' + info.error), info.ok ? 'ok' : 'bad');
-  }
-
   function bind() {
     $$('.tab').forEach(function (t) { t.onclick = function () { showTab(t.dataset.tab); }; });
     $('#btn-login').onclick = doLogin;
     $('#btn-register').onclick = doRegister;
     $('#btn-submit').onclick = doSubmit;
-    $('#btn-refresh-key').onclick = async function () { await refreshJudgeKey(); toast('已刷新判题机公钥 ' + state.judgeFp, 'ok'); };
     $('#btn-reload-problems').onclick = loadProblems;
-    $('#btn-judge-status').onclick = loadJudgeStatus;
-    $('#btn-clear-log').onclick = function () { $('#log').innerHTML = ''; };
-    if ($('#btn-save-creds')) $('#btn-save-creds').onclick = saveCredentials;
-    if ($('#btn-test-creds')) $('#btn-test-creds').onclick = testCredentials;
-    if ($('#btn-clear-creds')) $('#btn-clear-creds').onclick = function () {
-      state.db.clearCredentials();
-      toast('已清除本机凭据，请重新填写', 'ok');
-      $('#cfg-user').value = ''; $('#cfg-secret').value = '';
-      renderSetup();
-      showTab('setup');
-    };
+    if ($('#btn-reload-rank')) $('#btn-reload-rank').onclick = loadRank;
+    if ($('#btn-back-problems')) $('#btn-back-problems').onclick = function () { showTab('problems'); };
     $('#login-pass').addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
   }
 
