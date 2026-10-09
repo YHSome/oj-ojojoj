@@ -1,0 +1,7 @@
+# 统一换行与二进制标记
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.png binary
+*.zip binary
+*.bundle binary

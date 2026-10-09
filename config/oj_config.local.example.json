@@ -1,0 +1,17 @@
+{
+  "_说明": "后端私密配置覆盖（本文件不入库）。把本文件复制成 oj_config.local.json 再填真实值。",
+  "api": {
+    "base": "https://tinywebdb.appinventor.space/api",
+    "browse": "https://tinywebdb.appinventor.space/webdb-你的实例编号",
+    "user": "YOUR_USER",
+    "secret": "YOUR_SECRET"
+  },
+  "auth": {
+    "admin_key": "换成一串你自己定的管理员口令"
+  },
+  "paths": {
+    "_说明": "不填也可以：找不到路径时自动回落到仓库目录；也可以把便携工具链写在这里",
+    "python": "",
+    "toolchain_dirs": []
+  }
+}
