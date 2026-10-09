@@ -1,6 +1,6 @@
 @echo off
 rem ============================================================================
-rem  OJ 判题机 一键开关
+rem  OJ 判题机 一键开关（命令行版；图形版见 OJ中控台.exe）
 rem    双击本文件：在跑就停，没跑就起（等价 tools\oj_service.py toggle）
 rem    想放桌面：直接把本文件拖到桌面（内部会自动定位仓库目录）
 rem    其它用法：判题机开关.cmd status | start | stop | restart | watch
@@ -19,7 +19,7 @@ echo [OJ] 仓库目录 = %OJ_ROOT%
 set RC=%ERRORLEVEL%
 echo.
 if "%ACT%"=="toggle" (
-  echo 本窗口 4 秒后自动关闭。看详细日志：tools\oj.sh console 打开中控台。
+  echo 本窗口 4 秒后自动关闭。图形界面：双击 OJ中控台.exe
   timeout /t 4 >nul
 ) else (
   pause
