@@ -490,11 +490,32 @@ def cmd_import_problem(args, cfg, db, store):
 
 def cmd_rank(args, cfg, db, store):
     snap = store.rebuild_rank()
-    print("%-4s %-16s %-6s %-5s %-6s" % ("#", "user", "score", "ac", "submit"))
+    mode = snap.get("mode", "score")
+    print("模式=%s  开赛=%s  罚时=%s 分钟/次失败  人数=%d"
+          % (mode, snap.get("contest_start"), snap.get("penalty_min"), snap.get("total")))
+    pids = snap.get("problems") or []
+    if mode != "acm":
+        print("%-4s %-16s %-6s %-5s %-6s" % ("#", "user", "score", "ac", "submit"))
+        for row in snap["order"][:args.limit]:
+            print("%-4s %-16s %-6s %-5s %-6s"
+                  % (row["rank"], row["user"], row["score"], row["ac"], row["submit"]))
+        return 0
+    print("%-4s %-14s %-5s %-6s %s" % ("#", "user", "通过", "罚时", "逐题"))
     for row in snap["order"][:args.limit]:
-        print("%-4s %-16s %-6s %-5s %-6s"
-              % (row["rank"], row["user"], row["score"], row["ac"], row["submit"]))
-    print("共 %d 人，快照 ts=%s" % (snap["total"], snap["ts"]))
+        cells = row.get("cells") or {}
+        cs = []
+        for p in pids:
+            c = cells.get(p)
+            if not c:
+                cs.append("%s:·" % p)
+            elif c.get("v") == "ac":
+                cs.append("%s:%d%s" % (p, c.get("t", 0),
+                                       ("+%d" % c["f"]) if c.get("f") else ""))
+            else:
+                cs.append("%s:-%d" % (p, c.get("f", 0)))
+        print("%-4s %-14s %-5s %-6s %s"
+              % (row["rank"], row["user"], row["solved"], row["penalty"], " ".join(cs)))
+    print("（AC 数字=距开赛分钟数，+N=通过前失败次数；-N=尚未通过的失败次数）")
     return 0
 
 
