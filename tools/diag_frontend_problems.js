@@ -1,6 +1,15 @@
 /* 模拟前端「题目列表」页的加载逻辑，验证修复后能拿到题面 */
+const fs = require('fs');
 const path = require('path');
-require(path.join(__dirname, '..', 'frontend', 'assets', 'tinywebdb.js'));
+const FRONT = path.join(__dirname, '..', 'frontend', 'assets');
+const localCfg = path.join(FRONT, 'config.js');
+if (fs.existsSync(localCfg)) {
+  eval(fs.readFileSync(localCfg, 'utf8').replace(/\bwindow\b/g, 'globalThis'));
+} else {
+  console.error('缺少 frontend/assets/config.js（复制 config.example.js 并填值）');
+  process.exit(2);
+}
+require(path.join(FRONT, 'tinywebdb.js'));
 const DB = globalThis.OJDB;
 
 (async () => {

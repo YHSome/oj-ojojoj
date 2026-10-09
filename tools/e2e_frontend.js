@@ -7,13 +7,23 @@
  *
  *  用法: node tools/e2e_frontend.js [PID] [sample] [user]
  * ==========================================================================*/
+const fs = require('fs');
 const path = require('path');
 const FRONT = path.join(__dirname, '..', 'frontend', 'assets');
+
+// 先加载本机凭据（assets/config.js 不入库；缺失就用占位符并直接报错提示）
+const localCfg = path.join(FRONT, 'config.js');
+if (fs.existsSync(localCfg)) {
+  eval(fs.readFileSync(localCfg, 'utf8').replace(/\bwindow\b/g, 'globalThis'));
+} else {
+  console.error('缺少 frontend/assets/config.js：请复制 config.example.js 并填入你的 user/secret');
+  process.exit(2);
+}
+
 const C = require(path.join(FRONT, 'crypto.js'));
 require(path.join(FRONT, 'tinywebdb.js'));
 const DB = globalThis.OJDB;
 
-const fs = require('fs');
 const PID = process.argv[2] || 'a-plus-b';
 const SAMPLE = process.argv[3] || 'ac';
 const USER = process.argv[4] || ('web' + Math.floor(Math.random() * 900 + 100));
@@ -27,11 +37,11 @@ const CODES = {
 const LANG = { pyre: 'py' };
 
 // 也支持直接给一个源码文件路径：node e2e_frontend.js P1001 /path/to/main.py
-let CODE = CODES[SAMPLE], LANGID = LANG[SAMPLE] || 'cpp';
-if (!CODE) {
-  try { CODE = fs.readFileSync(SAMPLE, 'utf8'); LANGID = /\.py$/.test(SAMPLE) ? 'py' : 'cpp'; }
-  catch (e) { CODE = CODES.ac; }
-}
+const CODE = (function () {
+  if (CODES[SAMPLE]) return CODES[SAMPLE];
+  try { return fs.readFileSync(SAMPLE, 'utf8'); } catch (e) { return CODES.ac; }
+})();
+const LANGID = LANG[SAMPLE] || (/\.py$/.test(SAMPLE) ? 'py' : 'cpp');
 
 function log(kind, msg) {
   const tag = { ok: '✔', err: '✘', warn: '!', info: '·' }[kind] || '·';
