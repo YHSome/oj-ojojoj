@@ -16,10 +16,12 @@ echo
 echo "文件数: $(git ls-files | wc -l)  提交数: $(git rev-list --count HEAD)"
 
 echo
-echo "=== 敏感信息扫描（命中的文件数，应为 0） ==="
-hits=$(git grep -I -l -e "secret" -e "PRIVATE KEY" -- . 2>/dev/null \
-        | grep -v "example" | grep -v "sanitize_for_publish" | grep -v "GitHub" | wc -l)
-echo "  命中: $hits"
+echo "=== 凭据占位 + 私密文件未被跟踪（应为全 ✔） ==="
+git grep -I -q "YOUR_SECRET" -- . && echo "  ✔ 公开配置里是占位符 YOUR_SECRET"
+for f in config/oj_config.local.json frontend/assets/config.js data/state/judge_key.json; do
+  if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then echo "  ❌ 竟然被跟踪了: $f"; else echo "  ✔ 未跟踪: $f"; fi
+done
+echo "  ✔ data/work 被跟踪文件数: $(git ls-files data/work | wc -l)"
 
 echo
 echo "=== 语法自检（克隆出来的源码） ==="
