@@ -1,16 +1,21 @@
 // ============================================================================
-//  OJ 一键启动器（WinForms，单文件，编译产物为真正的 .exe）
+//  OJ 一键启动器（WinForms，单文件）
 //
-//  双击后：启动判题机 → 启动后端中控台 → 自动打开浏览器访问中控台。
-//  也支持命令行（便于自动化/排错，结果写入 logs\launcher.log）：
-//      OJ中控台.exe --start [--no-browser]   启动并退出（不开界面）
-//      OJ中控台.exe --stop                   全部停止
-//      OJ中控台.exe --status                 写状态后退出（0=都在跑，1=有没跑的）
+//  设计原则：**绝不去启动浏览器**。
+//  旧版本会用 5 种方式轮番尝试唤起浏览器，在某些机器上会反复拉起浏览器进程
+//  导致系统卡死；现在改为：启动判题机 + 中控台 → 地址显示在窗口里 + 自动复制
+//  到剪贴板，用户自己粘贴到浏览器打开。
 //
-//  编译：tools\build_launcher.cmd（用系统自带 csc.exe，不需要装任何东西）
+//  双击：启动判题机 → 启动中控台 → 把中控台地址复制到剪贴板
+//  命令行（结果写 logs\launcher.log）：
+//      OJ中控台.exe --start             启动并退出
+//      OJ中控台.exe --stop              全部停止
+//      OJ中控台.exe --status            0=都在跑，1=有没跑的
+//      OJ中控台.exe --urls              打印两个地址（便于脚本取用）
+//
+//  编译： python tools\build_launcher.py   （用系统自带 csc.exe，零依赖）
 // ============================================================================
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -31,13 +36,11 @@ static class OjEnv
 
     static OjEnv()
     {
-        // 1) 仓库根目录：exe 所在目录优先；找不到就回退到 D:\OJ
         string dir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
         if (File.Exists(Path.Combine(dir, "tools", "oj_service.py"))) Root = dir;
         else if (File.Exists(@"D:\OJ\tools\oj_service.py")) Root = @"D:\OJ";
         else Root = dir;
 
-        // 2) Python：先用随 DSH 附带的运行时，其次 PATH 里的 python
         string bundled = @"C:\Users\Administrator\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe";
         if (File.Exists(bundled)) Python = bundled; else Python = "python";
 
@@ -45,14 +48,14 @@ static class OjEnv
         try { Directory.CreateDirectory(Path.Combine(Root, "logs")); } catch { }
     }
 
+    public static Action<string> OnLog;
+
     public static void Log(string msg)
     {
         string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + msg;
         try { File.AppendAllText(LogFile, line + Environment.NewLine, Encoding.UTF8); } catch { }
         if (OnLog != null) OnLog(line);
     }
-
-    public static Action<string> OnLog;
 
     public static bool PortOpen(int port, int timeoutMs)
     {
@@ -69,7 +72,6 @@ static class OjEnv
         catch { return false; }
     }
 
-    /// <summary>跑一个 python 脚本并等它结束（隐藏窗口），返回输出。</summary>
     public static string RunPython(string scriptArgs, int timeoutMs)
     {
         var psi = new ProcessStartInfo();
@@ -94,7 +96,6 @@ static class OjEnv
         catch (Exception e) { return "启动失败: " + e.Message; }
     }
 
-    /// <summary>后台常驻启动（中控台服务用），不等待退出。</summary>
     public static Process StartDetached(string scriptArgs)
     {
         var psi = new ProcessStartInfo();
@@ -103,7 +104,6 @@ static class OjEnv
         psi.WorkingDirectory = Root;
         psi.UseShellExecute = false;
         psi.CreateNoWindow = true;
-        psi.RedirectStandardOutput = false;
         psi.EnvironmentVariables["PYTHONUTF8"] = "1";
         psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
         return Process.Start(psi);
@@ -127,146 +127,13 @@ static class OjEnv
 
     public static bool JudgeRunning() { return JudgePid() > 0; }
 
-    public static void OpenUrl(string url)
+    /// <summary>只复制，不打开任何程序。</summary>
+    public static bool Copy(string text)
     {
-        OpenUrlVerbose(url);
+        try { Clipboard.SetText(text); Log("已复制到剪贴板: " + text); return true; }
+        catch (Exception e) { Log("复制失败: " + e.Message); return false; }
     }
 
-    /// <summary>浏览器进程数（用于验证"到底打开没有"）。</summary>
-    static int BrowserCount()
-    {
-        int n = 0;
-        string[] names = { "msedge", "chrome", "firefox", "brave", "opera", "iexplore", "360se", "QQBrowser" };
-        foreach (string nm in names)
-        {
-            try { n += Process.GetProcessesByName(nm).Length; } catch { }
-        }
-        return n;
-    }
-
-    /// <summary>把一个 URL 交给系统打开；多种方式依次尝试，并记录每一步结果。</summary>
-    public static bool OpenUrlVerbose(string url)
-    {
-        // ② .NET ShellExecute；③ cmd start；④ 直接叫浏览器；⑤ explorer；⑥ 注册表
-        int before = BrowserCount();
-        Log("试着打开 " + url + (before > 0 ? "（浏览器已在运行 " + before + " 个进程）" : "（当前没有浏览器进程）"));
-
-        // ① .NET ShellExecute —— 标准做法，但在某些机器上会静默失败（不抛异常）
-        try
-        {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-            if (WaitBrowser(before, 3)) { Log("  [OK] ShellExecute 打开成功"); return true; }
-            Log("  [--] ShellExecute 没反应，换下一种");
-        }
-        catch (Exception e) { Log("  [--] ShellExecute 失败: " + e.Message); }
-
-        // ② cmd /c start（最可靠；但 start 即使打不开也会返回 0，所以还要看浏览器进程）
-        try
-        {
-            var psi = new ProcessStartInfo("cmd.exe", "/c start \"\" \"" + url + "\"");
-            psi.UseShellExecute = false; psi.CreateNoWindow = true;
-            var p = Process.Start(psi);
-            p.WaitForExit(8000);
-            bool seen = WaitBrowser(before, 3);
-            if (p.ExitCode == 0 && (seen || before > 0))
-            { Log("  [OK] cmd start 打开（退出码 0" + (seen ? "，已看到浏览器进程" : "，浏览器原本就在运行") + "）"); return true; }
-            Log("  [--] cmd start 退出码 " + p.ExitCode + (seen ? "" : "，且没看到浏览器进程"));
-        }
-        catch (Exception e) { Log("  [--] cmd start 失败: " + e.Message); }
-
-        // ③ 直接叫浏览器（用户可能没设默认浏览器）
-        string[] edges = {
-            @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-            @"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-            @"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            @"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        };
-        foreach (string exe in edges)
-        {
-            if (!File.Exists(exe)) continue;
-            try
-            {
-                var psi = new ProcessStartInfo(exe, "--new-window \"" + url + "\"");
-                psi.UseShellExecute = false;
-                Process.Start(psi);
-                if (WaitBrowser(before, 4)) { Log("  [OK] 用 " + Path.GetFileName(exe) + " 打开"); return true; }
-                Log("  [--] " + Path.GetFileName(exe) + " 没起来");
-            }
-            catch (Exception e) { Log("  [--] " + exe + " 失败: " + e.Message); }
-        }
-
-        // ④ explorer（有些系统只能靠它走 shell 关联）
-        try
-        {
-            Process.Start(new ProcessStartInfo("explorer.exe", "\"" + url + "\"") { UseShellExecute = false });
-            if (WaitBrowser(before, 3)) { Log("  [OK] explorer 打开"); return true; }
-            Log("  [--] explorer 没反应");
-        }
-        catch (Exception e) { Log("  [--] explorer 失败: " + e.Message); }
-
-        // ⑤ 从注册表里读默认浏览器的启动命令
-        try
-        {
-            string cmd = DefaultBrowserCommand();
-            if (!string.IsNullOrEmpty(cmd))
-            {
-                Log("  注册表默认浏览器命令: " + cmd);
-                string exe = cmd.StartsWith("\"") ? cmd.Substring(1, cmd.IndexOf('"', 1) - 1)
-                                                  : cmd.Split(' ')[0];
-                if (File.Exists(exe))
-                {
-                    Process.Start(new ProcessStartInfo(exe, "\"" + url + "\"") { UseShellExecute = false });
-                    if (WaitBrowser(before, 4)) { Log("  [OK] 用注册表里的浏览器打开"); return true; }
-                }
-            }
-        }
-        catch (Exception e) { Log("  [--] 注册表方式失败: " + e.Message); }
-
-        // 都失败：把地址放到剪贴板，并提示手动打开
-        try { Clipboard.SetText(url); Log("  已把地址复制到剪贴板，请手动粘贴到浏览器"); } catch { }
-        Log("  [X] 所有方式都没能打开浏览器，请手动访问: " + url);
-        return false;
-    }
-
-    static bool WaitBrowser(int before, int seconds)
-    {
-        for (int i = 0; i < seconds * 4; i++)
-        {
-            Thread.Sleep(250);
-            if (BrowserCount() > before) return true;
-        }
-        return false;
-    }
-
-    public static string DefaultBrowserCommand()
-    {
-        try
-        {
-            using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                @"SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice"))
-            {
-                if (k == null) return null;
-                string prog = k.GetValue("ProgId") as string;
-                if (string.IsNullOrEmpty(prog)) return null;
-                foreach (var root in new[] { Microsoft.Win32.Registry.ClassesRoot,
-                                             Microsoft.Win32.Registry.CurrentUser })
-                {
-                    try
-                    {
-                        using (var c = root.OpenSubKey(prog + @"\shell\open\command"))
-                        {
-                            if (c != null) return c.GetValue(null) as string;
-                        }
-                    }
-                    catch { }
-                }
-            }
-        }
-        catch { }
-        return null;
-    }
-
-    /// <summary>启动中控台服务（若端口未监听），返回是否可用。</summary>
     public static bool EnsureConsole()
     {
         if (PortOpen(ConsolePort, 400)) { Log("中控台已在运行（:" + ConsolePort + "）"); return true; }
@@ -297,7 +164,6 @@ static class OjEnv
         Log("停止判题机 …");
         RunPython("tools\\oj_service.py stop", 60000);
         ok = !JudgeRunning();
-        // 中控台：按端口找 pid 结束
         int pid = PidByPort(ConsolePort);
         if (pid > 0)
         {
@@ -338,62 +204,71 @@ static class OjEnv
 
 class MainForm : Form
 {
-    Label lJudge, lConsole, lHint;
-    TextBox box;
-    Button bStart, bStop, bConsole, bFront;
+    Label lJudge, lConsole, lTip;
+    TextBox box, tbConsole, tbFront;
+    Button bStart, bStop, bCopyConsole, bCopyFront, bProbe;
     System.Windows.Forms.Timer timer;
 
     public MainForm()
     {
-        Text = "OJ 判题机 · 后端中控台";
-        ClientSize = new Size(560, 400);
+        Text = "OJ 判题机 · 一键启动（不自动开浏览器）";
+        ClientSize = new Size(600, 470);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Microsoft YaHei UI", 9F);
 
         var title = new Label();
-        title.Text = "一键启动：判题机 + 中控台";
+        title.Text = "一键启动：判题机 + 后端中控台";
         title.Font = new Font(Font.FontFamily, 13F, FontStyle.Bold);
-        title.AutoSize = true; title.Location = new Point(16, 14);
+        title.AutoSize = true; title.Location = new Point(16, 12);
         Controls.Add(title);
 
-        lJudge = new Label(); lJudge.AutoSize = true; lJudge.Location = new Point(18, 52);
-        lConsole = new Label(); lConsole.AutoSize = true; lConsole.Location = new Point(18, 76);
-        lHint = new Label(); lHint.AutoSize = true; lHint.Location = new Point(18, 100);
-        lHint.ForeColor = Color.DimGray;
-        lHint.Text = "提示：中控台里可以调参数、看日志、暂停/恢复判题。";
-        Controls.Add(lJudge); Controls.Add(lConsole); Controls.Add(lHint);
+        lJudge = new Label(); lJudge.AutoSize = true; lJudge.Location = new Point(18, 48);
+        lConsole = new Label(); lConsole.AutoSize = true; lConsole.Location = new Point(18, 72);
+        lTip = new Label(); lTip.AutoSize = true; lTip.Location = new Point(18, 98);
+        lTip.ForeColor = Color.DimGray;
+        lTip.Text = "地址会自动复制到剪贴板 —— 自己粘贴到浏览器打开（本程序不启动任何浏览器）";
+        Controls.Add(lJudge); Controls.Add(lConsole); Controls.Add(lTip);
 
-        bStart = new Button(); bStart.Text = "▶  一键启动"; bStart.Location = new Point(18, 130);
-        bStart.Size = new Size(126, 36); bStart.Click += (s, e) => DoStart(true);
-        bStop = new Button(); bStop.Text = "■  全部停止"; bStop.Location = new Point(152, 130);
-        bStop.Size = new Size(126, 36); bStop.Click += (s, e) => DoStop();
-        bConsole = new Button(); bConsole.Text = "打开中控台"; bConsole.Location = new Point(286, 130);
-        bConsole.Size = new Size(120, 36);
-        bConsole.Click += (s, e) => ThreadPool.QueueUserWorkItem(_ =>
-        {
-            OjEnv.EnsureConsole();
-            OpenOnUiThread(OjEnv.ConsoleUrl);
-        });
-        bFront = new Button(); bFront.Text = "打开考生前端"; bFront.Location = new Point(414, 130);
-        bFront.Size = new Size(128, 36);
-        bFront.Click += (s, e) => OpenOnUiThread(OjEnv.FrontUrl);
-        Controls.Add(bStart); Controls.Add(bStop); Controls.Add(bConsole); Controls.Add(bFront);
+        // ---- 两个地址（只读文本框，点一下即全选，方便手动复制） ----
+        var l1 = new Label(); l1.Text = "中控台地址"; l1.AutoSize = true; l1.Location = new Point(18, 126);
+        Controls.Add(l1);
+        tbConsole = new TextBox();
+        tbConsole.Location = new Point(100, 122); tbConsole.Size = new Size(482, 24);
+        tbConsole.ReadOnly = true; tbConsole.Text = OjEnv.ConsoleUrl;
+        tbConsole.Click += (s, e) => tbConsole.SelectAll();
+        Controls.Add(tbConsole);
 
-        var bCopy = new Button(); bCopy.Text = "复制中控台地址";
-        bCopy.Location = new Point(18, 172); bCopy.Size = new Size(126, 26);
-        bCopy.Click += (s, e) =>
-        {
-            try { Clipboard.SetText(OjEnv.ConsoleUrl); OjEnv.Log("已复制 " + OjEnv.ConsoleUrl); }
-            catch (Exception ex) { OjEnv.Log("复制失败: " + ex.Message); }
-        };
-        var bProbe = new Button(); bProbe.Text = "重新探测浏览器";
-        bProbe.Location = new Point(152, 172); bProbe.Size = new Size(140, 26);
-        bProbe.Click += (s, e) => OpenOnUiThread(OjEnv.ConsoleUrl);
-        Controls.Add(bCopy); Controls.Add(bProbe);
+        var l2 = new Label(); l2.Text = "考生端地址"; l2.AutoSize = true; l2.Location = new Point(18, 156);
+        Controls.Add(l2);
+        tbFront = new TextBox();
+        tbFront.Location = new Point(100, 152); tbFront.Size = new Size(482, 24);
+        tbFront.ReadOnly = true; tbFront.Text = OjEnv.FrontUrl;
+        tbFront.Click += (s, e) => tbFront.SelectAll();
+        Controls.Add(tbFront);
+
+        // ---- 按钮 ----
+        bStart = new Button(); bStart.Text = "▶  一键启动"; bStart.Location = new Point(18, 188);
+        bStart.Size = new Size(126, 34); bStart.Click += (s, e) => DoStart();
+        bStop = new Button(); bStop.Text = "■  全部停止"; bStop.Location = new Point(152, 188);
+        bStop.Size = new Size(126, 34); bStop.Click += (s, e) => DoStop();
+
+        bCopyConsole = new Button(); bCopyConsole.Text = "复制中控台地址";
+        bCopyConsole.Location = new Point(286, 188); bCopyConsole.Size = new Size(140, 34);
+        bCopyConsole.Click += (s, e) => { OjEnv.Copy(OjEnv.ConsoleUrl); Flash("中控台地址已复制"); };
+
+        bCopyFront = new Button(); bCopyFront.Text = "复制考生端地址";
+        bCopyFront.Location = new Point(434, 188); bCopyFront.Size = new Size(140, 34);
+        bCopyFront.Click += (s, e) => { OjEnv.Copy(OjEnv.FrontUrl); Flash("考生端地址已复制"); };
+
+        bProbe = new Button(); bProbe.Text = "刷新状态";
+        bProbe.Location = new Point(18, 230); bProbe.Size = new Size(110, 26);
+        bProbe.Click += (s, e) => Refresh2();
+        Controls.Add(bStart); Controls.Add(bStop); Controls.Add(bCopyConsole);
+        Controls.Add(bCopyFront); Controls.Add(bProbe);
 
         box = new TextBox();
         box.Multiline = true; box.ScrollBars = ScrollBars.Vertical;
-        box.Location = new Point(18, 208); box.Size = new Size(524, 174);
+        box.Location = new Point(18, 264); box.Size = new Size(564, 192);
         box.ReadOnly = true; box.BackColor = Color.FromArgb(20, 22, 28);
         box.ForeColor = Color.Gainsboro; box.Font = new Font("Consolas", 9F);
         Controls.Add(box);
@@ -417,10 +292,19 @@ class MainForm : Form
         {
             Refresh2();
             if (OjEnv.JudgeRunning() && OjEnv.PortOpen(OjEnv.ConsolePort, 300))
-                OjEnv.Log("已经在运行中：直接点「打开中控台」即可");
-            else
-                DoStart(true);   // 双击即一键启动
+            {
+                OjEnv.Log("已在运行中；已为你复制中控台地址，去浏览器粘贴即可");
+                OjEnv.Copy(OjEnv.ConsoleUrl);
+                Flash("中控台地址已复制，粘到浏览器打开");
+            }
+            else DoStart();
         };
+    }
+
+    void Flash(string msg)
+    {
+        lTip.Text = msg + "（自己粘贴到浏览器打开）";
+        lTip.ForeColor = Color.SeaGreen;
     }
 
     void Refresh2()
@@ -429,31 +313,11 @@ class MainForm : Form
         int pid = OjEnv.JudgePid();
         lJudge.Text = "判题机：" + (j ? "运行中（pid=" + pid + "）" : "已停止");
         lJudge.ForeColor = j ? Color.SeaGreen : Color.Firebrick;
-        lConsole.Text = "中控台：" + (c ? "运行中  " + OjEnv.ConsoleUrl : "已停止");
+        lConsole.Text = "中控台：" + (c ? "运行中（" + OjEnv.ConsoleUrl + "）" : "已停止");
         lConsole.ForeColor = c ? Color.SeaGreen : Color.Firebrick;
     }
 
-    void OpenOnUiThread(string url)
-    {
-        // ShellExecute 走的是 COM/STA，在线程池线程里调用可能静默失败，
-        // 所以统一切回 UI 线程再打开。
-        try
-        {
-            BeginInvoke(new Action(() =>
-            {
-                bool ok = OjEnv.OpenUrlVerbose(url);
-                if (!ok)
-                    MessageBox.Show("没能自动打开浏览器。\n\n地址已复制到剪贴板，请手动粘贴打开：\n" + url,
-                                    "需要手动打开", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }));
-        }
-        catch
-        {
-            OjEnv.OpenUrlVerbose(url);
-        }
-    }
-
-    void DoStart(bool openBrowser)
+    void DoStart()
     {
         bStart.Enabled = false;
         ThreadPool.QueueUserWorkItem(_ =>
@@ -462,12 +326,24 @@ class MainForm : Form
             {
                 OjEnv.StartJudge();
                 bool cok = OjEnv.EnsureConsole();
-                if (cok && openBrowser) OpenOnUiThread(OjEnv.ConsoleUrl);
+                try
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        Refresh2();
+                        if (cok)
+                        {
+                            OjEnv.Copy(OjEnv.ConsoleUrl);
+                            Flash("启动完成，中控台地址已复制");
+                        }
+                        else Flash("中控台没起来，请看下面日志");
+                    }));
+                }
+                catch { }
             }
             finally
             {
-                try { BeginInvoke(new Action(() => { bStart.Enabled = true; Refresh2(); })); }
-                catch { }
+                try { BeginInvoke(new Action(() => { bStart.Enabled = true; })); } catch { }
             }
         });
     }
@@ -492,27 +368,26 @@ static class Program
     [STAThread]
     static int Main(string[] args)
     {
-        bool headless = false, noBrowser = false, doStop = false, doStatus = false;
-        string openUrl = null;
-        for (int i = 0; i < args.Length; i++)
+        bool headless = false, doStop = false, doStatus = false, doUrls = false;
+        foreach (string a in args)
         {
-            string s = args[i].ToLowerInvariant();
+            string s = a.ToLowerInvariant();
             if (s == "--start") headless = true;
-            else if (s == "--no-browser") noBrowser = true;
             else if (s == "--stop") { headless = true; doStop = true; }
             else if (s == "--status") { headless = true; doStatus = true; }
-            else if (s == "--open-url" && i + 1 < args.Length) { headless = true; openUrl = args[i + 1]; }
-            else if (args[i].StartsWith("http")) { headless = true; openUrl = args[i]; }
+            else if (s == "--urls") { headless = true; doUrls = true; }
         }
 
         if (headless)
         {
             OjEnv.Log("=== 命令行模式: " + string.Join(" ", args) + " ===");
-            if (openUrl != null)
+            if (doUrls)
             {
-                bool ok = OjEnv.OpenUrlVerbose(openUrl);
-                OjEnv.Log("打开结果: " + (ok ? "成功" : "失败（地址已复制到剪贴板）"));
-                return ok ? 0 : 1;
+                Console.WriteLine(OjEnv.ConsoleUrl);
+                Console.WriteLine(OjEnv.FrontUrl);
+                OjEnv.Log("中控台: " + OjEnv.ConsoleUrl);
+                OjEnv.Log("考生端: " + OjEnv.FrontUrl);
+                return 0;
             }
             if (doStatus)
             {
@@ -524,8 +399,9 @@ static class Program
             if (doStop) return OjEnv.StopAll() ? 0 : 1;
             bool okJ = OjEnv.StartJudge();
             bool okC = OjEnv.EnsureConsole();
-            if (okC && !noBrowser) OjEnv.OpenUrl(OjEnv.ConsoleUrl);
-            OjEnv.Log("结果: 判题机=" + (okJ ? "OK" : "失败") + " 中控台=" + (okC ? "OK" : "失败"));
+            if (okC) OjEnv.Copy(OjEnv.ConsoleUrl);
+            OjEnv.Log("结果: 判题机=" + (okJ ? "OK" : "失败") + " 中控台=" + (okC ? "OK" : "失败")
+                      + "（中控台地址已复制到剪贴板，请粘贴到浏览器）");
             return (okJ && okC) ? 0 : 1;
         }
 
