@@ -57,7 +57,21 @@ fi
 echo "  ✔ 干净（$(git rev-list --count HEAD) 个提交）"
 
 echo
-echo "=== 1) 用 main 的 frontend/ 子树生成 Pages 提交 ==="
+echo "=== 1) 给前端资源打版本号（破 CDN 缓存）并同步 main ==="
+PY=/c/Users/Administrator/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe
+VER="p$(git rev-parse --short HEAD)"
+if [ -n "$(git status --porcelain frontend/index.html)" ]; then
+  echo "  index.html 有未提交改动，先提交它"
+  git add frontend/index.html
+  git commit -q -m "chore(frontend): 提交 index.html 改动"
+fi
+env PYTHONUTF8=1 "$PY" tools/bump_frontend_version.py "$VER"
+if [ -n "$(git status --porcelain frontend/index.html)" ]; then
+  git add frontend/index.html
+  git commit -q -m "chore(frontend): 资源版本号 $VER（改前端后立刻生效，不受 CDN 缓存影响）"
+  echo "  已提交版本号变更"
+fi
+git push origin main 2>&1 | tail -2
 TREE=$(git rev-parse "main:frontend") || { echo "  取不到 main:frontend"; exit 4; }
 COMMIT=$(git commit-tree "$TREE" -m "pages: 发布纯静态前端到 GitHub Pages
 
