@@ -100,18 +100,21 @@
     if (name === 'rank') loadRank();
     if (name === 'mine') loadMine();
     if (name === 'problems') loadProblems();
+    if (name === 'setup') renderSetup();
   }
 
   /* --------------------------------------------------------- 初始化 */
   async function boot() {
     state.db = new DB({ log: log });
     log('info', '前端已启动，API = ' + state.db.cfg.api);
-    if (state.db.cfg.user === 'YOUR_USER' || state.db.cfg.secret === 'YOUR_SECRET') {
-      // 公开仓库里只有占位符：本地要复制 assets/config.example.js 成 assets/config.js
-      log('err', '还没有配置云端凭据：请把 assets/config.example.js 复制成 assets/config.js 并填入你的 user/secret');
-      toast('缺少 assets/config.js：请按 assets/config.example.html 的说明配置云端凭据', 'bad');
+    renderSetup();
+    if (!state.db.hasCredentials()) {
+      // 公开部署（例如 GitHub Pages）里不带任何密钥：让使用者填自己的实例
+      log('warn', '还没有配置云端凭据 → 请在「连接设置」里填入你的 TinyWebDB user/secret');
+      toast('首次使用：请到「连接设置」填入你的 TinyWebDB 实例信息', 'bad');
       $('#health').textContent = '未配置云端凭据';
       $('#health').className = 'pill bad';
+      showTab('setup');
       return;
     }
 
@@ -511,6 +514,53 @@
   }
 
   /* ---------------------------------------------------------------- 绑定 */
+  /* ------------------------------------------------------------ 连接设置 */
+  function renderSetup() {
+    var ok = state.db.hasCredentials();
+    var box = $('#setup-status');
+    if (!box) return;
+    box.innerHTML = ok
+      ? '<div class="prow"><span class="badge ac">已配置</span>'
+        + '<span class="muted small">API ' + esc(state.db.cfg.api) + ' · user '
+        + esc(state.db.cfg.user) + ' · secret ' + esc(String(state.db.cfg.secret).slice(0, 3)) + '***</span></div>'
+      : '<div class="prow"><span class="badge warn">未配置</span>'
+        + '<span class="muted small">填好下面的三项并保存，本页就能用了</span></div>';
+    if ($('#cfg-api')) {
+      if (!$('#cfg-api').value) $('#cfg-api').value = state.db.cfg.api || '';
+      if (!$('#cfg-user').value && ok) $('#cfg-user').value = state.db.cfg.user || '';
+    }
+  }
+
+  async function saveCredentials() {
+    var api = $('#cfg-api').value.trim() || 'https://tinywebdb.appinventor.space/api';
+    var user = $('#cfg-user').value.trim();
+    var secret = $('#cfg-secret').value.trim();
+    if (!user || !secret) return toast('user 和 secret 都要填', 'bad');
+    state.db.saveCredentials(api, user, secret);
+    log('ok', '凭据已保存在本机浏览器（api=' + api + ' user=' + user + '）');
+    toast('已保存，正在测试连通性…', 'ok');
+    var info = await state.db.ping();
+    if (!info.ok) {
+      toast('连不上：' + info.error, 'bad');
+      $('#health').textContent = '云端不可用';
+      $('#health').className = 'pill bad';
+      return;
+    }
+    $('#health').textContent = '云端可用 · 共 ' + info.count + ' 个标签';
+    $('#health').className = 'pill ok';
+    toast('连接成功（' + info.count + ' 个标签）', 'ok');
+    renderSetup();
+    await refreshJudgeKey();
+    await loadProblems();
+    showTab('problems');
+  }
+
+  async function testCredentials() {
+    var info = await state.db.ping();
+    toast(info.ok ? ('连通正常，' + info.count + ' 个标签，' + info.ms + 'ms')
+                  : ('连不上：' + info.error), info.ok ? 'ok' : 'bad');
+  }
+
   function bind() {
     $$('.tab').forEach(function (t) { t.onclick = function () { showTab(t.dataset.tab); }; });
     $('#btn-login').onclick = doLogin;
@@ -520,6 +570,15 @@
     $('#btn-reload-problems').onclick = loadProblems;
     $('#btn-judge-status').onclick = loadJudgeStatus;
     $('#btn-clear-log').onclick = function () { $('#log').innerHTML = ''; };
+    if ($('#btn-save-creds')) $('#btn-save-creds').onclick = saveCredentials;
+    if ($('#btn-test-creds')) $('#btn-test-creds').onclick = testCredentials;
+    if ($('#btn-clear-creds')) $('#btn-clear-creds').onclick = function () {
+      state.db.clearCredentials();
+      toast('已清除本机凭据，请重新填写', 'ok');
+      $('#cfg-user').value = ''; $('#cfg-secret').value = '';
+      renderSetup();
+      showTab('setup');
+    };
     $('#login-pass').addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
   }
 

@@ -13,14 +13,21 @@
 (function (root) {
   'use strict';
 
-  /* 凭据优先级：assets/config.js（不入库） > 这里的占位默认值。
-     公开仓库里不含任何真实 user/secret，避免把自己的云端写权限发到网上。 */
+  /* 凭据优先级：localStorage（用户自己填的） > assets/config.js（本机私有） > 占位默认值。
+     公开仓库/公开 Pages 上不含任何真实 user/secret，避免把云端写权限发给所有人。 */
   var LOCAL_CFG = (root.OJ_CONFIG && typeof root.OJ_CONFIG === 'object') ? root.OJ_CONFIG : {};
+  var CRED_KEY = 'oj_credentials';
+
+  function storedCreds() {
+    try { return JSON.parse(root.localStorage.getItem(CRED_KEY)) || {}; } catch (e) { return {}; }
+  }
+
+  var SAVED = storedCreds();
 
   var DEFAULTS = {
-    api: LOCAL_CFG.api || 'https://tinywebdb.appinventor.space/api',
-    user: LOCAL_CFG.user || 'YOUR_USER',
-    secret: LOCAL_CFG.secret || 'YOUR_SECRET',
+    api: SAVED.api || LOCAL_CFG.api || 'https://tinywebdb.appinventor.space/api',
+    user: SAVED.user || LOCAL_CFG.user || 'YOUR_USER',
+    secret: SAVED.secret || LOCAL_CFG.secret || 'YOUR_SECRET',
     minGapMs: LOCAL_CFG.minGapMs || 150,   // 本客户端两次请求的最小间隔（对社区服务礼貌一点）
     retries: LOCAL_CFG.retries || 4,
     chunkChars: LOCAL_CFG.chunkChars || 8000,  // 单值分片上限（保守取 8000 < 实测 10000）
@@ -245,6 +252,35 @@
   DB.prototype.dropChunked = async function (baseTag, n) {
     for (var i = 0; i < (n || 0); i++) await this.del(baseTag + ':' + i);
     await this.del(baseTag);
+  };
+
+  /* ---------------------------------------------------------- 凭据管理 */
+  DB.prototype.ping = async function () {
+    var t0 = Date.now();
+    try {
+      var n = await this.count();
+      return { ok: true, count: n, ms: Date.now() - t0 };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e), ms: Date.now() - t0 };
+    }
+  };
+
+  DB.prototype.hasCredentials = function () {
+    return !(this.cfg.user === 'YOUR_USER' || this.cfg.secret === 'YOUR_SECRET'
+             || !this.cfg.user || !this.cfg.secret);
+  };
+
+  DB.prototype.saveCredentials = function (api, user, secret) {
+    var obj = { api: api || this.cfg.api, user: user, secret: secret };
+    try { root.localStorage.setItem(CRED_KEY, JSON.stringify(obj)); } catch (e) { /* ignore */ }
+    this.cfg.api = obj.api;
+    this.cfg.user = obj.user;
+    this.cfg.secret = obj.secret;
+    return obj;
+  };
+
+  DB.prototype.clearCredentials = function () {
+    try { root.localStorage.removeItem(CRED_KEY); } catch (e) { /* ignore */ }
   };
 
   root.OJDB = DB;

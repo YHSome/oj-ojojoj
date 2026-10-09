@@ -26,6 +26,7 @@
   <button class="tab" data-tab="submit">答题 / 提交</button>
   <button class="tab" data-tab="mine">我的提交</button>
   <button class="tab" data-tab="rank">排行榜</button>
+  <button class="tab" data-tab="setup">连接设置</button>
   <button class="tab" data-tab="about">关于 / 加密链路</button>
 </nav>
 
@@ -98,6 +99,28 @@
       <button id="btn-judge-status">查询</button>
     </div>
     <div id="judge-status" class="list"></div>
+  </section>
+
+  <!-- ============================ 连接设置 ============================ -->
+  <section class="panel" data-panel="setup">
+    <h1>连接设置</h1>
+    <p class="muted">本页面是<b>纯静态前端</b>，不含任何云端密钥。首次使用请在下面填入
+      <b>你自己的 TinyWebDB 实例</b>信息，只保存在本浏览器（localStorage），不会上传到任何地方。</p>
+    <div id="setup-status" class="card"></div>
+    <div class="row">
+      <label>API 地址 <input id="cfg-api" placeholder="https://tinywebdb.appinventor.space/api"></label>
+    </div>
+    <div class="row">
+      <label>user <input id="cfg-user" placeholder="你的实例用户名"></label>
+      <label>secret <input id="cfg-secret" type="password" placeholder="你的实例密钥"></label>
+    </div>
+    <div class="row">
+      <button id="btn-save-creds" class="primary">保存并连接</button>
+      <button id="btn-test-creds">测试连通性</button>
+      <button id="btn-clear-creds" class="ghost">清除本机凭据</button>
+    </div>
+    <p class="muted small">安全提示：该密钥拥有实例的读写权限，等同于这个 OJ 的"后台钥匙"。
+      请不要把它贴到公开仓库、论坛或截图里；怀疑泄露就去 TinyWebDB 侧重置。</p>
   </section>
 
   <!-- ============================ 关于 ============================ -->
