@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OJ-OJOJOJ · 在线判题</title>
+<link rel="stylesheet" href="assets/style.css?v=p293e1b7">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">OJ</span>
+    <span>OJ-OJOJOJ</span>
+  </div>
+  <div class="spacer"></div>
+  <span id="session" class="session"></span>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="login">登录 / 注册</button>
+  <button class="tab" data-tab="problems">题目</button>
+  <button class="tab" data-tab="mine">提交记录</button>
+  <button class="tab" data-tab="rank">排行榜</button>
+</nav>
+
+<main class="wrap">
+
+  <!-- ============================ 登录 / 注册 ============================ -->
+  <section class="panel active" data-panel="login">
+    <h1>登录 / 注册</h1>
+    <div class="row">
+      <label>用户名 <input id="login-user" autocomplete="username" placeholder="例如 alice"></label>
+      <label>密码 <input id="login-pass" type="password" autocomplete="current-password" placeholder="至少 4 位"></label>
+    </div>
+    <div class="row">
+      <button id="btn-login" class="primary">登录</button>
+      <button id="btn-register">注册新账号</button>
+    </div>
+    <div id="auth-status" class="status-line hidden"><span class="dot"></span><span id="auth-status-text"></span></div>
+    <div id="auth-progress" class="progress-bar hidden"></div>
+  </section>
+
+  <!-- ============================ 题目 ============================ -->
+  <section class="panel" data-panel="problems">
+    <div class="row between">
+      <h1>题目</h1>
+      <button id="btn-reload-problems">刷新</button>
+    </div>
+    <div id="problem-list" class="list"></div>
+  </section>
+
+  <!-- ============================ 做题（从题目列表进入，不占标签页） ============================ -->
+  <section class="panel" data-panel="submit">
+    <div class="row between">
+      <button id="btn-back-problems" class="ghost">← 返回题目列表</button>
+      <span id="p-meta" class="muted small"></span>
+    </div>
+    <h2><span id="p-pid" class="pid">—</span> <span id="p-title"></span></h2>
+    <div id="p-statement" class="statement"></div>
+    <div id="p-samples"></div>
+
+    <div class="row between">
+      <label>语言
+        <select id="lang">
+          <option value="cpp">C++17</option>
+          <option value="c">C11</option>
+          <option value="py">Python 3</option>
+        </select>
+      </label>
+      <button id="btn-submit" class="primary">提交评测</button>
+    </div>
+    <textarea id="code" spellcheck="false" placeholder="在这里粘贴代码…"></textarea>
+
+    <h3>评测结果</h3>
+    <div id="watch-list" class="list"></div>
+  </section>
+
+  <!-- ============================ 提交记录 ============================ -->
+  <section class="panel" data-panel="mine">
+    <div class="row between">
+      <h1>提交记录</h1>
+      <button id="btn-reload-mine">刷新</button>
+    </div>
+    <div id="mine-list" class="list"></div>
+  </section>
+
+  <!-- ============================ 排行榜（ACM 赛制） ============================ -->
+  <section class="panel" data-panel="rank">
+    <div class="row between">
+      <h1>排行榜 <span id="rank-mode" class="muted small"></span></h1>
+      <button id="btn-reload-rank">刷新</button>
+    </div>
+    <div class="acm-wrap">
+      <table class="table acm">
+        <thead><tr id="rank-head"><th>#</th><th>用户</th><th>通过</th><th>罚时</th></tr></thead>
+        <tbody id="rank-body"></tbody>
+      </table>
+    </div>
+    <p class="muted small">ACM 赛制：先按通过题数排序，题数相同看罚时。
+      罚时 = 每题首次 AC 距开赛的分钟数 + 20 分钟 × 该题首次 AC 前的失败次数；绿色数字为该题用时（分钟）。</p>
+  </section>
+
+</main>
+
+<div id="toast" class="toast"></div>
+<!-- 诊断日志：不在界面上显示，出问题时可在控制台执行 showLog() 查看 -->
+<div id="log" class="logbox" hidden></div>
+
+<script src="assets/config.js?v=p293e1b7"></script>
+<script src="assets/crypto.js?v=p293e1b7"></script>
+<script src="assets/tinywebdb.js?v=p293e1b7"></script>
+<script src="assets/app.js?v=p293e1b7"></script>
+<script>
+  /* 排错用：控制台里敲 showLog() 就把隐藏的日志显示出来 */
+  window.showLog = function () {
+    var el = document.getElementById('log');
+    if (el) { el.hidden = false; el.scrollIntoView(); }
+  };
+</script>
+</body>
+</html>

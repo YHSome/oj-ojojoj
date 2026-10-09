@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OJ 前端配置示例</title>
+<style>body{background:#0e1116;color:#e7eaf0;font:14px/1.7 system-ui,"Microsoft YaHei";max-width:760px;margin:40px auto;padding:0 20px}code{background:#00000055;padding:2px 6px;border-radius:4px;font-family:ui-monospace,Consolas}</style>
+</head>
+<body>
+<h1>怎么配置前端凭据</h1>
+<ol>
+  <li>把 <code>assets/config.example.js</code> 复制成 <code>assets/config.js</code></li>
+  <li>填入你自己的 TinyWebDB 实例信息（<code>user</code> / <code>secret</code> / <code>api</code>）</li>
+  <li>在 <code>index.html</code> 的 <code>crypto.js</code> <b>之前</b>引入它：
+    <pre>&lt;script src="assets/config.js"&gt;&lt;/script&gt;</pre>
+  </li>
+</ol>
+<p><b>为什么这样做：</b>这个文件会被浏览器下载，等于公开你的云端写权限。
+仓库里只放占位符（<code>YOUR_USER</code>/<code>YOUR_SECRET</code>），真实的 <code>config.js</code>
+已被 <code>.gitignore</code> 排除，不要提交、不要发到公开网络。</p>
+<p>后端同理：真实密钥写在 <code>config/oj_config.local.json</code>（也不入库），
+见 <code>config/oj_config.local.example.json</code>。</p>
+</body>
+</html>
