@@ -78,20 +78,30 @@ sleep 3
 check_pages
 
 echo
-echo "=== 4) 站点自检（构建可能要等 1 分钟） ==="
+echo "=== 4) 站点自检 ==="
 "/c/Users/Administrator/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe" - <<PYEOF
-import time, urllib.request
-url = "https://%s.github.io/%s/" % ("${REPO%%/*}".lower(), "${REPO##*/}")
-for i in range(6):
-    try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "oj"}),
-                                    timeout=20) as r:
-            body = r.read(4000).decode("utf-8", "replace")
-        print("  ✔ %s  HTTP %s  含 index 标题: %s" % (url, r.status, "OJ-OJOJOJ" in body))
-        break
-    except Exception as e:
-        print("  … 第 %d 次还没好（%s）" % (i + 1, str(e)[:60]))
-        time.sleep(15)
-else:
-    print("  站点还没构建好，稍后再刷：%s" % url)
+import urllib.request
+owner, name = "${REPO}".split("/", 1)
+
+# 4.1 官方 Pages（需要先在 Settings -> Pages 选 gh-pages 分支，一次性设置）
+url_pages = "https://%s.github.io/%s/" % (owner.lower(), name)
+try:
+    with urllib.request.urlopen(urllib.request.Request(url_pages, headers={"User-Agent": "oj"}),
+                                timeout=20) as r:
+        print("  [官方 Pages] HTTP %s  %s" % (r.status, url_pages))
+except Exception as e:
+    print("  [官方 Pages] 还没启用/没好: %s" % str(e)[:60])
+    print("               启用方法：Settings -> Pages -> Deploy from a branch -> %s / (root)" % "${BRANCH}")
+
+# 4.2 免设置的镜像入口（raw.githack，仓库更新后自动跟随）
+base = "https://raw.githack.com/%s/%s/main/frontend/" % (owner, name)
+try:
+    with urllib.request.urlopen(urllib.request.Request(base + "index.html",
+                                                       headers={"User-Agent": "oj"}), timeout=20) as r:
+        body = r.read(2000).decode("utf-8", "replace")
+        print("  [githack 镜像] HTTP %s  text/html: %s" % (r.status, "<!DOCTYPE html>" in body))
+        print("                 %sindex.html" % base)
+except Exception as e:
+    print("  [githack 镜像] 失败: %s" % str(e)[:60])
 PYEOF
+
