@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>判题机中控台 · OJ-OJOJOJ</title>
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="logo">C</span><span>判题机中控台 <span class="muted small">D:\OJ</span></span></div>
+  <div class="spacer"></div>
+  <span id="cloud" class="pill">云端检查中…</span>
+  <span id="clock" class="pill"></span>
+</header>
+
+<main class="wrap">
+
+  <!-- ================= 状态 + 一键开关 ================= -->
+  <section class="card hero">
+    <div class="hero-left">
+      <div class="state">
+        <span id="dot" class="dot off"></span>
+        <span id="state-text" class="state-text">读取中…</span>
+      </div>
+      <div id="state-meta" class="muted small"></div>
+    </div>
+    <div class="hero-right">
+      <button id="btn-toggle" class="big primary">启动判题机</button>
+      <button id="btn-restart" class="big">重启</button>
+      <div class="row narrow">
+        <button id="btn-pause">暂停接单</button>
+        <button id="btn-resume">恢复接单</button>
+        <button id="btn-reload">热重载配置</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 指标 ================= -->
+  <section class="metrics">
+    <div class="metric"><div class="k">判题机 ID</div><div class="v" id="m-id">-</div></div>
+    <div class="metric"><div class="k">PID</div><div class="v" id="m-pid">-</div></div>
+    <div class="metric"><div class="k">工作线程 / 忙</div><div class="v" id="m-workers">-</div></div>
+    <div class="metric"><div class="k">云端待判队列</div><div class="v" id="m-queue">-</div></div>
+    <div class="metric"><div class="k">云端标签总数</div><div class="v" id="m-tags">-</div></div>
+    <div class="metric"><div class="k">可用语言</div><div class="v" id="m-langs">-</div></div>
+  </section>
+
+  <div class="grid2">
+    <!-- ================= 参数 ================= -->
+    <section class="card">
+      <div class="row between">
+        <h2>参数调整</h2>
+        <div class="row narrow">
+          <button id="btn-save" class="primary">保存</button>
+          <button id="btn-reset">还原</button>
+        </div>
+      </div>
+      <p class="muted small">改完点保存（写入 <code id="cfg-path">config/oj_config.json</code>），
+        再点「热重载」让运行中的判题机立即生效；标「需重启」的项要重启进程。</p>
+      <div id="params" class="params"></div>
+    </section>
+
+    <div class="stack">
+      <!-- ================= 运维动作 ================= -->
+      <section class="card">
+        <h2>运维动作</h2>
+        <div id="actions" class="actions"></div>
+        <div class="row narrow" style="margin-top:10px">
+          <label class="inline">快速提交验证
+            <select id="qs-user-type" hidden></select>
+          </label>
+        </div>
+        <div class="row narrow">
+          <input id="qs-user" placeholder="用户名" value="console" style="min-width:120px">
+          <select id="qs-pid"><option>P1001</option><option>P1002</option><option>a-plus-b</option></select>
+          <select id="qs-sample">
+            <option value="ac">AC</option><option value="wa">WA</option><option value="ce">CE</option>
+            <option value="tle">TLE</option><option value="re">RE</option>
+            <option value="mle">MLE</option><option value="ole">OLE</option><option value="pyac">Python AC</option>
+          </select>
+          <button id="btn-qsubmit">明文提交一次</button>
+        </div>
+      </section>
+
+      <!-- ================= 动作输出 ================= -->
+      <section class="card">
+        <div class="row between">
+          <h2>输出</h2>
+          <button id="btn-clear-out" class="ghost">清空</button>
+        </div>
+        <pre id="out" class="out">（执行动作后这里显示输出）</pre>
+      </section>
+    </div>
+  </div>
+
+  <!-- ================= 日志 ================= -->
+  <section class="card">
+    <div class="row between">
+      <h2>判题机日志</h2>
+      <div class="row narrow">
+        <label class="inline"><input type="checkbox" id="auto-log" checked> 自动刷新</label>
+        <button id="btn-log-now">立即刷新</button>
+      </div>
+    </div>
+    <pre id="log" class="log">（暂无日志）</pre>
+  </section>
+
+</main>
+
+<div id="toast" class="toast"></div>
+<script src="/assets/console.js"></script>
+</body>
+</html>
