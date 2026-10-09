@@ -548,20 +548,24 @@ class JudgeDaemon(object):
     def _adapt_intervals(self, n_judges):
         """机器越多，单机对云端的请求越要收敛（云端实测约 2 写/秒就 503）。
 
-        规则：min_interval 与队列轮询间隔都按 sqrt(台数) 放大，并随人数回落。
-        只调整这两个"可容忍延迟"的参数，判题相关请求不受影响。
+        规则：min_interval 与队列轮询间隔都按 sqrt(台数) 放大，随人少回落。
+        注意：主循环每轮是从 cfg 读 queue_refresh_interval_s 的，所以这里改配置值；
+        基准值在启动时抓一次，避免反复放大产生漂移。
         """
         if not self.cfg.getv("judge.adapt_rate_limit", True):
             return
-        base_gap = float(self.cfg.getv("api.min_interval_s", 0.45))
-        base_poll = float(self.cfg.getv("judge.queue_refresh_interval_s", 3.0))
+        base_gap = getattr(self, "_base_gap", None)
+        base_poll = getattr(self, "_base_poll", None)
+        if base_gap is None or base_poll is None:
+            base_gap = float(self.cfg.getv("api.min_interval_s", 0.45))
+            base_poll = float(self.cfg.getv("judge.queue_refresh_interval_s", 3.0))
+            self._base_gap, self._base_poll = base_gap, base_poll
         k = max(1.0, float(n_judges) ** 0.5)
         want_gap = round(base_gap * k, 3)
         want_poll = round(base_poll * k, 2)
-        if abs(want_gap - getattr(self.db, "min_interval_s", base_gap)) > 0.01:
+        if abs(want_gap - float(getattr(self.db, "min_interval_s", base_gap))) > 0.01:
             self.db.min_interval_s = want_gap
-        if abs(want_poll - self.poll_interval) > 0.05:
-            self.poll_interval = want_poll
+        self.cfg.setv("judge.queue_refresh_interval_s", want_poll)
         if want_poll != getattr(self, "_last_poll_log", None):
             self._last_poll_log = want_poll
             self.log("INFO", "自适应节流：%d 台在线 → 请求间隔 %.2fs，队列轮询 %.2fs"
