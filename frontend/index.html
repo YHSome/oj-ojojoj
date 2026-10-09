@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OJ-OJOJOJ · 在线判题</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">OJ</span>
+    <span>OJ-OJOJOJ <span class="muted small">云端 TinyWebDB · 本机判题机</span></span>
+  </div>
+  <div class="spacer"></div>
+  <span id="health" class="pill">检查中…</span>
+  <span id="judgekey" class="pill">公钥检查中…</span>
+  <span id="session" class="session"></span>
+  <button class="ghost" id="btn-refresh-key">刷新公钥</button>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="login">登录 / 注册</button>
+  <button class="tab" data-tab="problems">题目</button>
+  <button class="tab" data-tab="submit">答题 / 提交</button>
+  <button class="tab" data-tab="mine">我的提交</button>
+  <button class="tab" data-tab="rank">排行榜</button>
+  <button class="tab" data-tab="about">关于 / 加密链路</button>
+</nav>
+
+<main class="wrap">
+
+  <!-- ============================ 登录 ============================ -->
+  <section class="panel active" data-panel="login">
+    <h1>登录 / 注册</h1>
+    <p class="muted">账号由判题机后端管理（命令总线 RPC），密码只以 <code>sha256(salt:pass)</code> 存在云端。</p>
+    <div class="row">
+      <label>用户名 <input id="login-user" autocomplete="username" placeholder="例如 alice"></label>
+      <label>密码 <input id="login-pass" type="password" autocomplete="current-password" placeholder="至少 4 位"></label>
+    </div>
+    <div class="row">
+      <button id="btn-login" class="primary">登录</button>
+      <button id="btn-register">注册新账号</button>
+    </div>
+  </section>
+
+  <!-- ============================ 题目 ============================ -->
+  <section class="panel" data-panel="problems">
+    <div class="row between">
+      <h1>题目列表</h1>
+      <button id="btn-reload-problems">刷新</button>
+    </div>
+    <div id="problem-list" class="list"></div>
+  </section>
+
+  <!-- ============================ 答题 ============================ -->
+  <section class="panel" data-panel="submit">
+    <div class="row between">
+      <h2><span id="p-pid" class="pid">—</span> <span id="p-title">请先在题目页选择题目</span></h2>
+    </div>
+    <div id="p-meta" class="muted small"></div>
+    <div id="p-statement" class="statement"></div>
+    <div id="p-samples"></div>
+
+    <div class="row between">
+      <label>语言
+        <select id="lang">
+          <option value="cpp">C++17</option>
+          <option value="c">C11</option>
+          <option value="py">Python 3</option>
+        </select>
+      </label>
+      <button id="btn-submit" class="primary">🔒 加密并提交</button>
+    </div>
+    <textarea id="code" spellcheck="false" placeholder="在这里粘贴代码…提交时会用判题机公钥 RSA-OAEP 加密后写入 TinyWebDB"></textarea>
+
+    <h3>实时评测</h3>
+    <div id="watch-list" class="list"></div>
+  </section>
+
+  <!-- ============================ 我的 ============================ -->
+  <section class="panel" data-panel="mine">
+    <h1>我的提交</h1>
+    <p class="muted">点击任意一条可解密查看详情（只有本浏览器能解，因为结果是用你的公钥加密的）。</p>
+    <div id="mine-list" class="list"></div>
+  </section>
+
+  <!-- ============================ 榜单 ============================ -->
+  <section class="panel" data-panel="rank">
+    <h1>排行榜</h1>
+    <table class="table">
+      <thead><tr><th>#</th><th>用户</th><th>总分</th><th>通过</th><th>提交</th></tr></thead>
+      <tbody id="rank-body"></tbody>
+    </table>
+    <div class="row between" style="margin-top:1rem">
+      <h3>判题机在线状态</h3>
+      <button id="btn-judge-status">查询</button>
+    </div>
+    <div id="judge-status" class="list"></div>
+  </section>
+
+  <!-- ============================ 关于 ============================ -->
+  <section class="panel" data-panel="about">
+    <h1>前后端分离与非对称加密链路</h1>
+    <p class="muted">前端是这份纯静态 HTML/CSS/JS（浏览器直连 TinyWebDB，官方接口开放 CORS）；后端是 <code>D:\OJ</code> 的判题机。</p>
+    <ol class="steps">
+      <li><b>发布公钥</b>：判题机启动时生成/加载 RSA-2048 私钥，把公钥写进 <code>oj:pubkey</code>。</li>
+      <li><b>前端加密</b>：用 <code>crypto.subtle</code> 的 RSA-OAEP(SHA-256) 分块加密源码（每块 ≤190 字节），
+          密文分片写入 <code>code:&lt;SID&gt;</code> 与 <code>code:&lt;SID&gt;:i</code>，同时写入自己的公钥
+          <code>sub:&lt;SID&gt;.client_pubkey</code>。</li>
+      <li><b>入队</b>：写 <code>sub:&lt;SID&gt;</code> 和 <code>q:&lt;SID&gt;</code>。</li>
+      <li><b>后端轮询</b>：判题机每 <b>3 秒</b>扫描一次队列，发现新提交 → 拉取密文 → 用私钥解密
+          → <b>同时把云端 <code>code:&lt;SID&gt;</code> 改成「判题中」并删除密文分片</b>。</li>
+      <li><b>判题</b>：编译 + 逐测试点执行（独立目录、超时/内存/输出监控、任务租约可恢复）。</li>
+      <li><b>结果回传</b>：结果用<b>你的公钥</b>加密后写入 <code>res:&lt;SID&gt;</code>（密文分片 <code>res:&lt;SID&gt;:i</code>），
+          并附判题机私钥签名；前端解密 + 用 <code>oj:pubkey</code> 验签。</li>
+    </ol>
+    <p class="muted small">注意：源码与结果在云端只以密文形式存在，判题机取码后立即清除密文。
+      客户端私钥保存在浏览器 <code>sessionStorage</code>（关闭标签页即失效）。</p>
+
+    <h3>运行日志</h3>
+    <button id="btn-clear-log" class="ghost">清空</button>
+    <div id="log" class="logbox"></div>
+  </section>
+
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script src="assets/config.js"></script>
+<script src="assets/crypto.js"></script>
+<script src="assets/tinywebdb.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
