@@ -24,8 +24,10 @@ ojcheck_*/
 
 # 本机私密配置（仓库里只有 *.example.* 占位版）
 config/oj_config.local.json
-frontend/assets/config.js
 *.local.json
+# 注意：frontend/assets/config.js 是【有意入库】的——
+# 公开部署的前端必须带上云端凭据才能连上后端，这是使用方明确接受的口子。
+# 想收回就把这一行注释去掉，并改用页面里的「连接设置」让用户自己填。
 
 # ============================================================
 #  体积巨大的外部运行时（自行下载，见 CREDITS.md）
