@@ -1130,6 +1130,66 @@ class Store(object):
                 out.append(j)
         return out
 
+    # ==================================================== 多机共判：集群视图
+    def cluster_snapshot(self, ttl=None):
+        """返回在线判题机列表（含各自余力），用于计算"我该抢多少"。
+
+        每条：{id, host, workers, busy, free, langs, load_pct, weighted_free, ts}
+        weighted_free = 空闲槽位 × CPU 余量惩罚，用来做按能力分摊。
+        """
+        ttl = ttl or int(self.cfg.getv("judge.cluster_ttl_s", 45))
+        now = now_ts()
+        rows = []
+        for j in self.judges_online(ttl):
+            workers = max(1, int(j.get("workers") or 1))
+            busy = max(0, int(j.get("busy") or 0))
+            free = max(0, workers - busy)
+            load = float(j.get("load_pct") or 0) / 100.0
+            # CPU 越忙，越不该抢新活；下限 0.15 避免完全停手
+            penalty = max(0.15, 1.0 - load)
+            rows.append({"id": j.get("id"), "host": j.get("host"), "workers": workers,
+                         "busy": busy, "free": free, "langs": j.get("langs") or [],
+                         "load_pct": int(load * 100),
+                         "weighted_free": round(free * penalty, 3),
+                         "queue": int(j.get("queue") or 0),
+                         "paused": bool(j.get("paused")),
+                         "share": j.get("share"),
+                         "share_mode": j.get("share_mode", ""),
+                         "judged": int((j.get("stats") or {}).get("judged") or 0),
+                         "ts": int(j.get("ts") or 0), "age_s": now - int(j.get("ts") or 0)})
+        rows.sort(key=lambda r: str(r.get("id")))
+        return rows
+
+    def claim_share(self, judge_id=None, own_free=1, own_load_pct=0, cluster=None):
+        """算"这个任务我该不该抢"的概率：自己余力 / 集群余力。
+
+        没有别人在线（或快照拿不到）时返回 1.0（独占模式，不影响单机使用）。
+        """
+        judge_id = judge_id or self.judge_id
+        cluster = cluster if cluster is not None else self.cluster_snapshot()
+        others = [r for r in cluster if r.get("id") != judge_id and not r.get("paused")]
+        me = [r for r in cluster if r.get("id") == judge_id]
+        my_load = own_load_pct if me and not me[0].get("load_pct") else \
+            (me[0].get("load_pct") if me else own_load_pct)
+        my_penalty = max(0.15, 1.0 - float(my_load or 0) / 100.0)
+        my_weight = max(0.0, own_free) * my_penalty
+        other_weight = sum(max(0.0, r.get("weighted_free") or 0) for r in others)
+        total = my_weight + other_weight
+        if total <= 0 or not others:
+            return 1.0
+        p = my_weight / total
+        lo = float(self.cfg.getv("judge.claim_min_prob", 0.08))
+        return max(lo, min(1.0, p))
+
+    def cluster_summary(self, cluster=None):
+        cluster = cluster if cluster is not None else self.cluster_snapshot()
+        return {"judges": len(cluster),
+                "workers": sum(r["workers"] for r in cluster),
+                "free": sum(r["free"] for r in cluster),
+                "busy": sum(r["busy"] for r in cluster),
+                "langs": sorted({l for r in cluster for l in (r.get("langs") or [])}),
+                "rows": cluster}
+
     def write_meta(self, extra=None):
         meta = {"schema": SCHEMA, "system": "OJ-OJOJOJ",
                 "updated": now_ts(), "judge_id": self.judge_id,

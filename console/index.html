@@ -47,6 +47,20 @@
     <div class="metric"><div class="k">可用语言</div><div class="v" id="m-langs">-</div></div>
   </section>
 
+  <!-- ================= 多机共判集群 ================= -->
+  <section class="card">
+    <div class="row between">
+      <h2>多机共判集群</h2>
+      <span id="cluster-sum" class="muted small"></span>
+    </div>
+    <table class="table">
+      <thead><tr><th>判题机</th><th>主机</th><th>空闲/并发</th><th>CPU</th><th>分单比例</th><th>模式</th><th>已判</th><th>心跳</th></tr></thead>
+      <tbody id="cluster-body"><tr><td colspan="8" class="muted">读取中…</td></tr></tbody>
+    </table>
+    <p class="muted small">分单比例 = 该机空闲权重 / 集群空闲权重（auto 模式下按此概率接单，实现压力均摊）。
+      只有一台在线时为 100%，退化成单机行为。</p>
+  </section>
+
   <div class="grid2">
     <!-- ================= 参数 ================= -->
     <section class="card">

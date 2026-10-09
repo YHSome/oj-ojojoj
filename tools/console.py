@@ -51,6 +51,11 @@ EDITABLE = [
     ("judge.archive_ttl_h", "float", "提交归档 TTL 小时（0=不归档）"),
     ("judge.session_ttl_h", "float", "登录会话有效期小时"),
     ("judge.batch_user_stats", "bool", "用户统计攒批落库"),
+    ("judge.share_mode", "str", "多机共判分单模式：auto(按余力分摊) / greedy(能抢就抢) / solo(独占)"),
+    ("judge.adapt_rate_limit", "bool", "多机时自动放大请求间隔与轮询间隔（避免云端 503）"),
+    ("judge.claim_min_prob", "float", "多机共判时自己至少占的单量比例（默认 0.08，防止被大机器饿死）"),
+    ("judge.lease_renew_ratio", "float", "租约续期间隔占租约时长的比例（默认 0.4）"),
+    ("judge.cluster_ttl_s", "int", "判定「同伴在线」的心跳有效秒数"),
     ("judge.public_case_detail", "bool", "对外返回逐点对比明细（期望/实际）—— **默认关闭，防泄露答案**"),
     ("judge.public_stderr", "bool", "RE 时把选手自己的报错输出回传（不含标准答案）"),
     ("judge.recover_on_start", "bool", "启动时恢复自己遗留的任务"),
@@ -301,6 +306,16 @@ class Console(object):
     def status(self):
         st = self.proc.info()
         cloud = cloud_status(self.cfg)
+        cluster = {"judges": 0, "rows": [], "error": ""}
+        try:
+            sys.path.insert(0, BACKEND)
+            from twdb import TinyWebDB as _T
+            from store import Store as _S
+            db = _T(self.cfg.getv("api.base"), self.cfg.getv("api.user"),
+                    self.cfg.getv("api.secret"), min_interval_s=0.2, retries=2)
+            cluster = _S(db, self.cfg).cluster_summary()
+        except Exception as e:  # noqa: BLE001
+            cluster["error"] = str(e)[:120]
         langs = []
         try:
             sys.path.insert(0, BACKEND)
@@ -328,6 +343,7 @@ class Console(object):
                 "key_exists": os.path.isfile(self.cfg.getv("crypto.private_key") or ""),
             },
             "editable": self.editable_values(),
+            "cluster": cluster,
             "actions": [{"id": k, "label": v[0]} for k, v in ACTIONS.items()],
             "console_time": time.strftime("%Y-%m-%d %H:%M:%S"),
             "console_started": self.started,

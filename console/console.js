@@ -74,6 +74,30 @@
     $('#cfg-path').textContent = st.config_path || '';
 
     renderParams(st.editable || []);
+    renderCluster(st.cluster || {});
+  }
+
+  function renderCluster(cl) {
+    var body = $('#cluster-body');
+    if (!body) return;
+    var rows = cl.rows || [];
+    var sum = '在线 ' + (cl.judges || 0) + ' 台 · 总并发 ' + (cl.workers || 0)
+      + ' · 空闲 ' + (cl.free || 0) + ' · 语言 ' + ((cl.langs || []).join(',') || '-');
+    if (cl.error) sum += ' · 读取失败: ' + cl.error;
+    $('#cluster-sum').textContent = sum;
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="8" class="muted">没有心跳（判题机未启动或刚下线）</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(function (r) {
+      var share = (r.share === null || r.share === undefined) ? '-' : Math.round(r.share * 100) + '%';
+      return '<tr><td><b>' + esc(r.id) + '</b></td><td class="muted">' + esc(r.host) + '</td>'
+        + '<td>' + esc(r.free) + ' / ' + esc(r.workers) + '</td>'
+        + '<td>' + esc(r.load_pct) + '%</td><td>' + esc(share) + '</td>'
+        + '<td class="muted">' + esc(r.share_mode || '-') + '</td>'
+        + '<td>' + esc(r.judged) + '</td>'
+        + '<td class="muted">' + esc(r.age_s) + 's 前</td></tr>';
+    }).join('');
   }
 
   function renderParams(rows) {

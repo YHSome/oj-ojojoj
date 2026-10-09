@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config as ojconfig
 import judge as ojjudge
+import sysinfo
 from store import (Store, STATUS_PENDING, STATUS_JUDGING, STATUS_DONE,
                    new_sid, now_ts)
 from twdb import TinyWebDB, TwdbError
@@ -116,11 +117,25 @@ class JudgeDaemon(object):
         self.local_queue = collections.deque()
         self.queued_sids = set()
         self.queue_cond = threading.Condition()
+        # ---- 多机共判 ----
+        self.cpu = sysinfo.CpuSampler(cache_s=1.0)
+        self.inflight = {}                    # sid -> lease token（用于续租）
+        self.inflight_lock = threading.Lock()
+        self._cluster = []
+        self._cluster_ts = 0.0
+        self._share = 1.0
+        self.share_mode = str(cfg.getv("judge.share_mode", "auto"))   # auto|greedy|solo
         self._load_seen()
 
     # -------------------------------------------------------------- 本地状态
+    def _ns(self):
+        """同机多实例时，把本地文件按 judge.id 隔离（seen/工作目录/锁）。"""
+        return self.store.judge_id if getattr(self.args, "allow_multi", False) else ""
+
     def _seen_path(self):
-        return os.path.join(self.cfg.path("state"), "seen.json")
+        ns = self._ns()
+        name = ("seen-%s.json" % ns) if ns else "seen.json"
+        return os.path.join(self.cfg.path("state"), name)
 
     def _load_seen(self):
         try:
@@ -288,7 +303,9 @@ class JudgeDaemon(object):
     # 实测教训：两个实例用同一个 judge_id 会互相抢同一个提交（租约分不清谁是谁），
     # 结果是一个进程拿密文清单去编译、另一个正常判题，判定被覆盖成 CE。
     def _lock_path(self):
-        return os.path.join(self.cfg.path("state"), "daemon.lock")
+        ns = self._ns()
+        name = ("daemon-%s.lock" % ns) if ns else "daemon.lock"
+        return os.path.join(self.cfg.path("state"), name)
 
     @staticmethod
     def _pid_alive(pid):
@@ -349,10 +366,23 @@ class JudgeDaemon(object):
             self.log("ERROR", "无法连接 TinyWebDB，请检查网络/密钥")
             return 1
         langs = self.judge.available_langs()
-        self.log("INFO", "判题机 %s 启动：workers=%d 语言=%s"
-                 % (self.store.judge_id, self.workers, ",".join(sorted(langs)) or "无"))
+        self.log("INFO", "判题机 %s 启动：workers=%d 语言=%s 分单模式=%s"
+                 % (self.store.judge_id, self.workers, ",".join(sorted(langs)) or "无",
+                    self.share_mode))
         if not langs:
             self.log("WARN", "没有任何可用语言！请先运行 tools/selfcheck.py 检查工具链")
+        # 打印一下集群现状，便于确认多机共判是否生效
+        try:
+            cluster = self.store.cluster_snapshot()
+            others = [r for r in cluster if r.get("id") != self.store.judge_id]
+            if others:
+                self.log("INFO", "检测到 %d 台同伴判题机：%s"
+                         % (len(others), ", ".join("%s(空闲%d)" % (r["id"], r["free"])
+                                                   for r in others)))
+            else:
+                self.log("INFO", "当前只有我自己在线（独占接单）")
+        except TwdbError as e:
+            self.log("WARN", "读取集群视图失败: %s" % e)
         self.store.write_meta()
         self.store.heartbeat(self._hb_payload())
         if self.cfg.getv("judge.recover_on_start", True):
@@ -371,6 +401,9 @@ class JudgeDaemon(object):
         pub = threading.Thread(target=self.publisher_loop, name="pub", daemon=True)
         pub.start()
         threads.append(pub)
+        ren = threading.Thread(target=self._renewer_loop, name="lease", daemon=True)
+        ren.start()
+        threads.append(ren)
 
         if self.args.once:
             # 一次性模式：拉取 → 判完 → 连续 N 轮无活可干就退出
@@ -471,7 +504,7 @@ class JudgeDaemon(object):
 
     # --------------------------------------------------------- 任务拉取
     def fill_queue(self):
-        """主循环专属：向云端拉一次待判队列 → 放进本地队列。"""
+        """主循环专属：向云端拉一次待判队列 → 按**能力**与**余力占比**筛选后放进本地队列。"""
         if self.paused:
             return 0
         with self.queue_cond:
@@ -482,23 +515,101 @@ class JudgeDaemon(object):
         if not cands or random.random() < 0.1:
             known = set(self.seen.keys()) | set(self.queued_sids)
             cands = list(cands) + self.store.unindexed_pending(seen=known)
-        n = 0
+
+        share = self._refresh_share()
+        my_langs = set(self.judge.available_langs())
+        n = skipped_lang = 0
         with self.queue_cond:
             for c in cands:
                 sid = str(c.get("sid") or "")
                 if not sid or sid in self.queued_sids:
                     continue
-                # 候选重判的队列条目带 candidate 标记：绕过"已判过"去重
                 if not c.get("candidate") and self.is_seen(sid):
+                    continue
+                # ① 能力路由：自己没这个语言的工具链就别抢，留给有能力的判题机
+                lang = self.judge.resolve_lang(c.get("lang") or "")
+                if my_langs and lang and lang not in my_langs:
+                    skipped_lang += 1
+                    continue
+                # ② 余力分摊：按 "我的空闲权重 / 集群空闲权重" 概率接单
+                if share < 1.0 and random.random() > share:
                     continue
                 self.queued_sids.add(sid)
                 self.local_queue.append(c)
                 n += 1
             if n:
                 self.queue_cond.notify_all()
-        if n:
-            self.log("DEBUG", "拉取到 %d 个待判提交（本地队列 %d）" % (n, backlog + n))
+        if n or skipped_lang:
+            self.log("DEBUG", "拉取 %d 个待判（本地队列 %d，分单概率 %.2f，跳过语言不匹配 %d，排队机 %d 台）"
+                     % (n, backlog + n, share, skipped_lang, len(self._cluster)))
         return n
+
+    # --------------------------------------------------- 多机共判：余力分摊
+    def _adapt_intervals(self, n_judges):
+        """机器越多，单机对云端的请求越要收敛（云端实测约 2 写/秒就 503）。
+
+        规则：min_interval 与队列轮询间隔都按 sqrt(台数) 放大，并随人数回落。
+        只调整这两个"可容忍延迟"的参数，判题相关请求不受影响。
+        """
+        if not self.cfg.getv("judge.adapt_rate_limit", True):
+            return
+        base_gap = float(self.cfg.getv("api.min_interval_s", 0.45))
+        base_poll = float(self.cfg.getv("judge.queue_refresh_interval_s", 3.0))
+        k = max(1.0, float(n_judges) ** 0.5)
+        want_gap = round(base_gap * k, 3)
+        want_poll = round(base_poll * k, 2)
+        if abs(want_gap - getattr(self.db, "min_interval_s", base_gap)) > 0.01:
+            self.db.min_interval_s = want_gap
+        if abs(want_poll - self.poll_interval) > 0.05:
+            self.poll_interval = want_poll
+        if want_poll != getattr(self, "_last_poll_log", None):
+            self._last_poll_log = want_poll
+            self.log("INFO", "自适应节流：%d 台在线 → 请求间隔 %.2fs，队列轮询 %.2fs"
+                     % (n_judges, want_gap, want_poll))
+
+    def _refresh_share(self, force=False):
+        """刷新集群视图与自己应得的分单比例（缓存几秒，避免每轮都读云端）。"""
+        if self.share_mode == "solo":
+            self._share = 1.0
+            return 1.0
+        ttl = float(self.cfg.getv("judge.cluster_cache_s", 5.0))
+        now = time.time()
+        if not force and (now - self._cluster_ts) < ttl:
+            return self._share
+        with self.busy_lock:
+            busy = self.busy
+        workers = self.workers
+        free = max(0, workers - busy)
+        try:
+            self._cluster = self.store.cluster_snapshot()
+            if self.share_mode == "greedy":
+                self._share = 1.0
+            else:
+                self._share = self.store.claim_share(
+                    judge_id=self.store.judge_id, own_free=free,
+                    own_load_pct=self.cpu.load_pct(), cluster=self._cluster)
+        except TwdbError as e:
+            self.log("WARN", "集群视图刷新失败，暂时独占接单: %s" % e)
+            self._share = 1.0
+        self._adapt_intervals(max(1, len(self._cluster)))
+        self._cluster_ts = now
+        return self._share
+
+    def _renewer_loop(self):
+        """租约续期：长时间判题（如连环 TLE）时不能让租约过期被别人抢走。"""
+        ratio = float(self.cfg.getv("judge.lease_renew_ratio", 0.4))
+        base = float(self.cfg.getv("judge.lease_seconds", 180))
+        interval = max(5.0, base * ratio)
+        while not self.stop_flag.is_set():
+            self.stop_flag.wait(interval)
+            with self.inflight_lock:
+                items = list(self.inflight.items())
+            for sid, token in items:
+                try:
+                    if not self.store.renew_lease(sid, token):
+                        self.log("WARN", "提交 %s 续租失败（可能已被别的判题机接管）" % sid)
+                except TwdbError as e:
+                    self.log("WARN", "续租 %s 出错: %s" % (sid, e))
 
     def pop_local(self, timeout=2.0):
         with self.queue_cond:
@@ -509,8 +620,14 @@ class JudgeDaemon(object):
         return None
 
     def _hb_payload(self):
+        with self.busy_lock:
+            busy = self.busy
         return {"host": os.environ.get("COMPUTERNAME", "host"),
-                "workers": self.workers, "busy": self.busy,
+                "workers": self.workers, "busy": busy,
+                "free": max(0, self.workers - busy),
+                "load_pct": self.cpu.load_pct(),
+                "share": round(float(self._share), 3),
+                "share_mode": self.share_mode,
                 "paused": bool(self.paused),
                 "pid": os.getpid(),
                 "version": VERSION,
@@ -563,11 +680,17 @@ class JudgeDaemon(object):
         token = self.store.acquire_lease(
             sid, assume_free=(status != STATUS_JUDGING), candidate=candidate)
         if not token:
-            return False                  # 领取失败，让下一轮重来
+            return False                  # 被别人抢到了（多机共判的正常情况）
+        # 抢到就立刻出队：让其它判题机下一轮看不到这个任务，减少无谓争抢
+        self.store.dequeue(sid)
+        with self.inflight_lock:
+            self.inflight[sid] = token
         try:
             self.do_judge(sid, token, sub, candidate=candidate)
             return True
         finally:
+            with self.inflight_lock:
+                self.inflight.pop(sid, None)
             self.store.release_lease(sid, token)
 
     def do_judge(self, sid, token, sub=None, candidate=False):
@@ -601,6 +724,9 @@ class JudgeDaemon(object):
                 self.stats["failed"] += 1
                 return
             workdir = os.path.join(self.cfg.path("work"), str(sid))
+            ns = self._ns()
+            if ns:                       # 同机多实例：工作目录也按判题机隔离
+                workdir = os.path.join(self.cfg.path("work"), ns, str(sid))
             t0 = time.time()
             try:
                 (verdict, score, cases, clog, ms, kb, msg, checker) = self.judge.judge_submission(
