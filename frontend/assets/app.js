@@ -94,6 +94,61 @@
     box.scrollTop = box.scrollHeight;
   }
 
+  /* ------------------------------------------------- 操作反馈（点下去立刻有动静） */
+  var SLOW_HINT_MS = 3000;      // 超过这个时间提示"云端较慢"
+  var VERY_SLOW_MS = 10000;
+
+  function setStatus(el, text, kind) {
+    var box = typeof el === 'string' ? $(el) : el;
+    if (!box) return;
+    var txt = box.querySelector('span:last-child');
+    if (!text) {
+      box.className = 'status-line hidden';
+      return;
+    }
+    box.className = 'status-line ' + (kind || '');
+    if (txt) txt.textContent = text;
+  }
+
+  function progress(el, on) {
+    var bar = typeof el === 'string' ? $(el) : el;
+    if (bar) bar.className = 'progress-bar' + (on ? '' : ' hidden');
+  }
+
+  function busy(btn, label) {
+    var b = typeof btn === 'string' ? $(btn) : btn;
+    if (!b) return function () {};
+    if (!b.dataset.label) b.dataset.label = b.textContent;
+    b.textContent = label || '处理中…';
+    b.classList.add('btn-busy');
+    b.disabled = true;
+    return function () {
+      b.textContent = b.dataset.label;
+      b.classList.remove('btn-busy');
+      b.disabled = false;
+    };
+  }
+
+  function busyAll(labels) {
+    var restores = labels.map(function (it) { return busy(it[0], it[1]); });
+    return function () { restores.forEach(function (f) { f(); }); };
+  }
+
+  function elapsedText(t0) {
+    var s = Math.round((Date.now() - t0) / 1000);
+    return s + 's';
+  }
+
+  /* 给一个"时间到就升级提示"的小定时器，返回取消函数 */
+  function slowWatcher(t0, onSlow) {
+    var t = setInterval(function () {
+      var ms = Date.now() - t0;
+      if (ms >= VERY_SLOW_MS) onSlow('very', ms);
+      else if (ms >= SLOW_HINT_MS) onSlow('slow', ms);
+    }, 1000);
+    return function () { clearInterval(t); };
+  }
+
   function showTab(name) {
     $$('.tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === name); });
     $$('.panel').forEach(function (p) { p.classList.toggle('active', p.dataset.panel === name); });
@@ -193,48 +248,144 @@
   }
 
   /* ------------------------------------------------------------- 命令总线 */
-  async function rpc(op, args, timeoutMs) {
+  async function rpc(op, args, timeoutMs, onStage) {
     var cid = newCid();
+    var t0 = Date.now();
+    onStage && onStage('sending', t0, cid);
     await state.db.putJson('cmd:' + cid, {
       cid: cid, op: op, args: args || {},
       user: state.session ? state.session.user : '',
       token: state.session ? state.session.token : '',
       status: 'pending', ts: nowSec()
     });
-    var t0 = Date.now(), limit = timeoutMs || 30000;
+    onStage && onStage('sent', t0, cid);
+    var limit = timeoutMs || 30000;
+    var n = 0;
     while (Date.now() - t0 < limit) {
       await new Promise(function (r) { setTimeout(r, 1200); });
+      n += 1;
+      onStage && onStage('waiting', t0, cid, n);
       var rep = await state.db.getJson('reply:' + cid, null);
-      if (rep) return rep;
+      if (rep) {
+        onStage && onStage('replied', t0, cid, n);
+        return rep;
+      }
     }
     return { ok: false, msg: '超时：判题机没在运行吗？（cmd ' + cid + '）', data: {} };
   }
 
   /* ------------------------------------------------------------ 登录注册 */
+  var AUTH_STAGES = {
+    sending: '正在把请求写入云端…',
+    sent: '已提交，等待判题机接单…',
+    waiting: '判题机处理中…',
+    replied: '已收到判题机应答'
+  };
+
+  function authStage(stage, t0, cid, n) {
+    if (stage === 'replied') {
+      setStatus('#auth-status', '已收到应答，正在校验…', 'ok');
+      return;
+    }
+    var text = AUTH_STAGES[stage] || '处理中…';
+    if (stage === 'waiting') {
+      text += '（已等 ' + elapsedText(t0) + '）';
+    }
+    setStatus('#auth-status', text, '');
+    if (stage === 'sent') progress('#auth-progress', true);
+  }
+
   async function doLogin() {
     var user = $('#login-user').value.trim(), pass = $('#login-pass').value;
-    if (!user || !pass) return toast('请输入用户名和密码', 'bad');
-    log('info', '登录中…');
-    var rep = await rpc('login', { user: user, pass: pass });
-    if (!rep.ok) return toast(rep.msg || '登录失败', 'bad');
+    if (!user || !pass) {
+      toast('请输入用户名和密码', 'bad');
+      setStatus('#auth-status', '请先填写用户名和密码', 'bad');
+      return;
+    }
+    var restore = busyAll([['#btn-login', '登录中…'], ['#btn-register', '注册']]);
+    $('#login-user').disabled = $('#login-pass').disabled = true;
+    // 立刻给反馈，不等网络
+    toast('正在登录，请稍候…', '');
+    setStatus('#auth-status', '正在把请求写入云端…', '');
+    progress('#auth-progress', true);
+    var t0 = Date.now();
+    var stopWatch = slowWatcher(t0, function (level, ms) {
+      setStatus('#auth-status', level === 'very'
+        ? '云端响应很慢（已等 ' + Math.round(ms / 1000) + 's）——判题机在运行吗？'
+        : '云端响应较慢，已等 ' + Math.round(ms / 1000) + 's…', 'warn');
+    });
+    var rep;
+    try {
+      rep = await rpc('login', { user: user, pass: pass }, 30000, authStage);
+    } catch (e) {
+      rep = { ok: false, msg: '网络错误: ' + e.message };
+    } finally {
+      stopWatch();
+      progress('#auth-progress', false);
+      restore();
+      $('#login-user').disabled = $('#login-pass').disabled = false;
+    }
+    if (!rep.ok) {
+      toast(rep.msg || '登录失败', 'bad');
+      setStatus('#auth-status', '登录失败：' + (rep.msg || '未知原因'), 'bad');
+      log('err', '登录失败：' + (rep.msg || ''));
+      return;
+    }
     state.session = { user: rep.data.user.user, token: rep.data.token, nick: rep.data.user.nick || rep.data.user.user };
     LS.set('oj_session', state.session);
     LS.set('oj_last_user', user);
     renderSession();
+    setStatus('#auth-status', '登录成功（耗时 ' + elapsedText(t0) + '）', 'ok');
     toast('登录成功：' + state.session.nick, 'ok');
     showTab('problems');
   }
 
   async function doRegister() {
     var user = $('#login-user').value.trim(), pass = $('#login-pass').value;
-    if (!user || !pass) return toast('请输入用户名和密码', 'bad');
-    var rep = await rpc('register', { user: user, pass: pass, nick: user });
-    if (!rep.ok) return toast(rep.msg || '注册失败', 'bad');
-    toast('注册成功，已自动登录', 'ok');
+    if (!user || !pass) {
+      toast('请输入用户名和密码', 'bad');
+      setStatus('#auth-status', '请先填写用户名和密码', 'bad');
+      return;
+    }
+    if (pass.length < 4) {
+      toast('密码至少 4 位', 'bad');
+      setStatus('#auth-status', '密码至少 4 位', 'bad');
+      return;
+    }
+    var restore = busyAll([['#btn-register', '注册中…'], ['#btn-login', '登录']]);
+    $('#login-user').disabled = $('#login-pass').disabled = true;
+    toast('正在注册，请稍候…', '');
+    setStatus('#auth-status', '正在把请求写入云端…', '');
+    progress('#auth-progress', true);
+    var t0 = Date.now();
+    var stopWatch = slowWatcher(t0, function (level, ms) {
+      setStatus('#auth-status', level === 'very'
+        ? '云端响应很慢（已等 ' + Math.round(ms / 1000) + 's）——判题机在运行吗？'
+        : '云端响应较慢，已等 ' + Math.round(ms / 1000) + 's…', 'warn');
+    });
+    var rep;
+    try {
+      rep = await rpc('register', { user: user, pass: pass, nick: user }, 30000, authStage);
+    } catch (e) {
+      rep = { ok: false, msg: '网络错误: ' + e.message };
+    } finally {
+      stopWatch();
+      progress('#auth-progress', false);
+      restore();
+      $('#login-user').disabled = $('#login-pass').disabled = false;
+    }
+    if (!rep.ok) {
+      toast(rep.msg || '注册失败', 'bad');
+      setStatus('#auth-status', '注册失败：' + (rep.msg || '未知原因'), 'bad');
+      log('err', '注册失败：' + (rep.msg || ''));
+      return;
+    }
     state.session = { user: rep.data.user.user, token: rep.data.token, nick: rep.data.user.nick || user };
     LS.set('oj_session', state.session);
     LS.set('oj_last_user', user);
     renderSession();
+    setStatus('#auth-status', '注册成功并已自动登录（耗时 ' + elapsedText(t0) + '）', 'ok');
+    toast('注册成功，已自动登录', 'ok');
     showTab('problems');
   }
 
@@ -315,6 +466,7 @@
     var pid = state.current.pid, sid = newSid();
     var langId = $('#lang').value;
     var panel = openResultPanel(sid, pid);
+    var restoreBtn = busy('#btn-submit', '加密提交中…');
     // 先把源码在本地留一份：即使网络失败/判题机清掉云端密文，代码也不会丢
     SRC.put(sid, { pid: pid, lang: langId, code: code, ts: nowSec() });
     try {
@@ -349,6 +501,8 @@
     } catch (e) {
       log('err', '提交失败: ' + e.message);
       toast('提交失败: ' + e.message, 'bad');
+    } finally {
+      restoreBtn();
     }
   }
 

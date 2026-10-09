@@ -44,6 +44,9 @@
       <button id="btn-login" class="primary">登录</button>
       <button id="btn-register">注册新账号</button>
     </div>
+    <div id="auth-status" class="status-line hidden"><span class="dot"></span><span id="auth-status-text"></span></div>
+    <div id="auth-progress" class="progress-bar hidden"></div>
+    <p class="muted small" id="auth-hint">云端 TinyWebDB 每次请求约 0.5~1.5 秒，登录要走「下发命令 → 判题机处理 → 回读结果」三步，通常 2~5 秒。</p>
   </section>
 
   <!-- ============================ 题目 ============================ -->
