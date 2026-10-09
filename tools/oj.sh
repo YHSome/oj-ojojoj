@@ -51,9 +51,11 @@ case "${1:-help}" in
   e2e)       shift; "C:/Users/Administrator/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/node/bin/node.exe" "$T/e2e_frontend.js" "$@";;
   keygen)    shift; run "$B/admin_cli.py" keygen "$@";;
   pubkey)    shift; run "$B/admin_cli.py" pubkey "$@";;
-  proxy)     shift; run "$T/github_proxy.py" "$@";;                 # 本机 GitHub 代理（绕过 DNS 污染）
-  ghnet)     shift; run "$T/diag_github_net.py" "$@";;              # GitHub 网络诊断
+  proxy)     shift; run "$T/github_proxy.py" "$@";;                 # 本机 GitHub 代理（DNS 型污染时有效）
+  ghnet)     shift; run "$T/diag_github_net.py" "$@";;              # GitHub 网络三层诊断
+  ghscan)    shift; run "$T/scan_github_channels.py" "$@";;         # 多 IP × 多 SNI 扫描幸存通道
   ghfix)     shift; run "$T/fix_github_hosts.py" "$@";;             # hosts 修复（需管理员）
+  ghzip)     shift; run "$T/get_repo_zip.py" "$@";;                 # 网页打不开也能下载仓库
   cryptotest) shift; run "$T/test_crypto_python.py" "$@";;          # 前后端加密互通测试
   py)        shift; run "$@";;                 # 直接跑任意 python 脚本
   *)
@@ -76,8 +78,9 @@ case "${1:-help}" in
   ctl                  中控台 API 自测
   e2e <PID> <sample>   用真实前端 JS 跑加密端到端（ac/wa/ce）
   keygen / pubkey      生成并发布判题机密钥对 / 查看公钥
-  proxy                启动本机 GitHub 代理（DNS 被污染时用，浏览器设 127.0.0.1:8899）
-  ghnet                诊断 GitHub 连通性（DNS/TCP/HTTPS/镜像逐个测）
+  proxy                启动本机 GitHub 代理（DNS 型污染时有效，浏览器设 127.0.0.1:8899）
+  ghnet / ghscan       GitHub 网络三层诊断 / 多 IP×SNI 扫描
+  ghzip [--extract]    绕过网页下载仓库 zip（codeload→ghproxy 自动切换）
   cryptotest           前后端加密互通测试（Python ↔ 浏览器 WebCrypto）
   daemon               启动判题机（常驻，Ctrl+C 退出）
   once                 判完当前队列就退出

@@ -1,35 +1,46 @@
-# GitHub 打不开怎么办（DNS 污染排查与修复）
+# GitHub 打不开怎么办（实测排查手册）
 
-## 一、先分清是哪一层坏了
+> 结论先行：**推送/拉取走 SSH，网页被封也不影响你用 Git。**
+> 只有"在浏览器上访问 github.com"这件事会被网络阻断卡住，而它的成因有三种，**对策完全不同**，
+> 所以先按本文第一步定位，别急着改 hosts。
+
+---
+
+## 第一步：三层定位
 
 ```bash
-bash tools/oj.sh ghnet          # 等价于 python tools/diag_github_net.py
+bash tools/oj.sh ghnet      # = python tools/diag_github_net.py
 ```
 
-本机实测的**真实案例**（可作为对照）：
+它会把每一层都打出来。判据如下：
 
-| 域名 | 本地 DNS 解析 | TCP 443 | 结论 |
-|---|---|---|---|
-| `github.com` | `20.27.177.113` | ✘ 超时 | **被污染，网页打不开** |
-| `www.github.com` | `20.27.177.113` | ✘ | 同上 |
-| `api.github.com` | `20.205.243.168` | ✔ 276ms | 正常 |
-| `codeload.github.com` | `20.205.243.165` | ✔ 244ms | 正常 |
-| `raw.githubusercontent.com` | `185.199.108.133` | ✔ 236ms | 正常 |
-| `ssh.github.com` | `20.205.243.160` | ✔ 231ms | 正常（**推送走这里，一直没问题**） |
+| 现象 | 病因 | 对应方案 |
+|---|---|---|
+| DNS 解析出的 IP **连不上 443**，但换成真实 IP 就能连 | **DNS 污染**（最常见） | ✅ 方案 A：钉死 hosts |
+| IP 能连上（TCP 200ms），但 **TLS 握手对 `github.com` 超时，对 `api.github.com` 正常** | **SNI 级阻断** | ❌ hosts 无效 → 方案 C/D |
+| 连 TCP 都超时、换 IP 也不行、SSH 也不通 | 整条链路被封 | 方案 D（换网络） |
 
-关键判据：**`github.com` 的 IP 连不上，但 API/SSH/raw 全正常** —— 这不是"GitHub 挂了"，
-而是**只有网页那个域名被解析到了死 IP**。而且污染是**间歇性**的（同一命令隔几分钟可能解析出不同结果），
-所以表现为"有时能上有时候不能上"。
+第三种情况在本机出现过一次完整的实测记录：
 
-用 `python tools/find_github_ip.py` 可以列出**实测可用**的 IP（GitHub 官方网段，逐个做
-TCP+TLS(SNI=github.com)+GET / 验证）。本机当前可用：`20.205.243.166`（最快）、`140.82.113.3` 等。
+```
+同一 IP 20.205.243.166：
+   SNI=github.com        ✘ The handshake operation timed out
+   SNI=api.github.com    ✔ 215ms      ← 同一台机器、同一个 IP，只是域名不同
+   SNI=codeload...       ✘ / ✔ 随阻断强度变化
+SSH  github.com:22       ✔ Hi YHSome! You've successfully authenticated
+```
 
-## 二、修复方案（按推荐度排序）
+**为什么第二种情况改 hosts 没用**：hosts 只解决"去哪里"，而 SNI 阻断发生在
+"握手时明文的域名"这一层——包已经到 GitHub 的 IP 了，中间设备看到 ClientHello 里的
+`github.com` 就把连接掐掉。同理，普通的本地 CONNECT 代理也救不了（它只是转发 TCP，SNI 依旧是 `github.com`）。
 
-### 方案 A：钉死 DNS（永久生效，推荐）
+---
 
-**双击 `tools\fix_hosts_admin.cmd`** —— 会自动申请管理员权限，往
-`C:\Windows\System32\drivers\etc\hosts` 写入：
+## 方案 A：钉死 DNS（仅解决"DNS 污染"这一种）
+
+**双击 `tools\fix_hosts_admin.cmd`**（会自动提权；预览 `... dry`；还原 `... revert`）。
+
+它往 `C:\Windows\System32\drivers\etc\hosts` 写：
 
 ```
 # === OJ github hosts fix (begin) ===
@@ -38,62 +49,76 @@ TCP+TLS(SNI=github.com)+GET / 验证）。本机当前可用：`20.205.243.166`�
 # === OJ github hosts fix (end) ===
 ```
 
-然后自动 `ipconfig /flushdns` 并验证。
+IP 用 `python tools/find_github_ip.py` 现测现取（会做 TCP + TLS(SNI=github.com) + GET / 全流程验证），
+别照抄文中的 IP——它会变。
 
-* 预览（不写入）：`tools\fix_hosts_admin.cmd dry`
-* 还原：`tools\fix_hosts_admin.cmd revert`
-* 备份：写入前自动存 `hosts.ojbak`；还原时另存 `hosts.ojbak2`
+> 本机当前属于"SNI 级阻断"，所以此时跑这个脚本**验证会失败**。等阻断退回 DNS 型时它就有用。
 
-> 如果这个 IP 后来也被阻断，把脚本里的 `$Ip` 换成 `find_github_ip.py` 输出的新 IP 即可。
-
-### 方案 B：本机代理（不改系统、不要管理员）
+## 方案 B：本机代理（仅解决 DNS 型 + 让你不动系统设置）
 
 ```bash
-python tools/github_proxy.py            # 监听 127.0.0.1:8899
-python tools/github_proxy.py --selftest # 自测（已验证返回 200 + GitHub 真证书）
+python tools/github_proxy.py     # 127.0.0.1:8899
+# 然后双击 tools\browse_github.cmd（Edge 独立配置走代理，不动你日常浏览器）
+# 或手动把浏览器代理设为 127.0.0.1:8899
 ```
 
-然后任选一种：
+原理：对 github.com 用钉死的可用 IP 建连，TLS 由浏览器端到端完成（拿到的是 GitHub 真证书）。
+**同样是 DNS 型才有效**，SNI 型无效。
 
-* **双击 `tools\browse_github.cmd`** —— 用 Edge 以独立配置目录打开 GitHub，只这个实例走代理，
-  完全不动你平时的浏览器设置（推荐，最省事）；
-* 手动把浏览器/系统代理设为 `127.0.0.1:8899`（Chrome/Edge：设置 → 系统 → 代理）；
-* 命令行也能用：
-  ```bash
-  git -c http.proxy=http://127.0.0.1:8899 clone https://github.com/YHSome/oj-ojojoj.git
-  ```
-
-原理：代理对 `github.com` 直接用**钉死的可用 IP** 建连，TLS 由浏览器端到端完成，
-SNI/Host 仍是 `github.com`，所以拿到的是 **GitHub 真证书**，不存在中间人；其它域名照常解析。
-
-### 方案 C：镜像（只想看代码/下代码）
+## 方案 C：没网页也能拿代码（实测一直可用）
 
 ```bash
-# 浏览仓库
-https://gh-proxy.com/https://github.com/YHSome/oj-ojojoj
-# 下载 zip
-https://gh-proxy.com/https://github.com/YHSome/oj-ojojoj/archive/refs/heads/main.zip
+python tools/get_repo_zip.py --extract
+#   [codeload 官方] ✔ 217.0 KB   ← 实测 0.5 秒
+#   已解压: dist/oj-ojojoj-main（97 个文件）
 ```
 
-实测：`gh-proxy.com` 可用；`ghfast.top` / `ghproxy.net` 对**网页**返回 403（但下载 release 附件可用）；
-`cdn.jsdelivr.net` 本机超时。
+脚本会在三个通道间自动切换：`codeload.github.com` → `ghproxy.net` → `gh-proxy.com`。
+适合"只想看代码/给别人发一份"的场景。
 
-## 三、重要：推送从来就没坏
+浏览器里也可以直接开这些地址（只读，别在镜像页面上登录）：
 
-Git 走的是 **SSH（`git@github.com:22`）**，那条路一直正常：
+```
+https://codeload.github.com/YHSome/oj-ojojoj/zip/refs/heads/main
+https://ghproxy.net/https://github.com/YHSome/oj-ojojoj/archive/refs/heads/main.zip
+```
+
+## 方案 D：要真正用 github.com 网页（登录、开 issue、设 token）
+
+只能在**网络层**解决，本机软件做不到：
+
+1. **换网络**：手机热点 / 其他运营商线路，最省事且立刻见效；
+2. **VPN / 境外代理服务**（本项目不提供，也不内置任何翻墙实现）；
+3. 等阻断解除 —— 这类阻断常常是**间歇性**的（本机 30 分钟内就从"完全可用"变成"SNI 阻断"）。
+
+---
+
+## 永远可用的一条：Git 走 SSH
+
+```bash
+bash tools/push_github.sh YHSome/oj-ojojoj     # 推送
+git pull                                       # 拉取（origin 已配成 SSH）
+```
+
+本机实测（网页 HTTPS 全断的情况下）：
 
 ```
 $ ssh -T git@github.com
-Hi YHSome! You've successfully authenticated...
+Hi YHSome! You've successfully authenticated, but GitHub does not provide shell access.
 
 $ bash tools/push_github.sh YHSome/oj-ojojoj
-   04da63b..xxxxx  main -> main
+   09e20d7..xxxxx  main -> main
 ```
 
-也就是说：**即使浏览器打不开 github.com，`git push` / `git pull` 照样能用**。
-仓库本身的读写不依赖网页。
+**网页登不上 ≠ 你推不了代码。** 需要看渲染后的页面时，再考虑方案 D。
 
-## 四、为什么不能由脚本自动改 hosts
+---
 
-DSH 沙箱禁止写工作区外的文件（实测 `hosts` 写入被拒绝 `Permission denied`），
-所以做成了**一键脚本**：你双击运行即可（它在沙箱之外、以管理员身份执行）。
+## 附：三种病因的一分钟判定脚本
+
+```bash
+python tools/diag_github_net.py        # 三层 + 镜像，一次全测
+python tools/scan_github_channels.py   # 多 IP × 多 SNI 扫描，找幸存的入口
+python tools/final_github_check.py     # 最终定性：能用什么 / 不能用什么
+python tools/get_repo_zip.py --extract # 绕过网页拿代码
+```
